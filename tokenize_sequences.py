@@ -1,8 +1,3 @@
-"""
-Tokenize sequences and pad/clip for transformer input.
-Author: Hamid
-"""
-
 def tokenize_and_pad(
     sequences,
     vocab,
