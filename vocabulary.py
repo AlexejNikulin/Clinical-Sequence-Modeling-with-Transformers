@@ -105,7 +105,7 @@ class Vocabulary:
     _next_proc: int = 30000
     _next_med: int = 40000
     _next_readm: int = 50000
-    _next_death: int = 6000
+    _next_death: int = 60000
 
     def __init__(self, df: pd.DataFrame, token_converter: Optional[TokenConverter] = None):
         self.token_converter = token_converter or TokenConverter()
@@ -256,6 +256,15 @@ class Vocabulary:
             return self.death_vocab[token]
         # If unknown, map to UNK id
         return self.special_vocab[self.UNK]
+    
+    def get_unknown_token(self) -> str:
+        return self.UNK
+    
+    def get_padding_token(self) -> str:
+        return self.PAD
+    
+    def get_masking_token(self) -> str:
+        return self.MASK
 
 if __name__ == "__main__":
     import pandas as pd
@@ -302,27 +311,18 @@ if __name__ == "__main__":
     print(vocab.death_vocab)
 
     # -------------------------
-    # 2) From one example row -> token (with UNK fallback)
-    # -------------------------
-    row_for_token = df.iloc[1]  # DIAG I10
-    token = vocab.row_to_token(row_for_token)
-    print("\nRow -> Token")
-    print("Row:", row_for_token.to_dict())
-    print("Token:", token)
-
-    # -------------------------
-    # 3) From another row -> ID (token -> id)
+    # 2) From another row -> ID (token -> id)
     # -------------------------
     row_for_id = df.iloc[4]  # MED LISINOPRIL
-    token2 = vocab.row_to_token(row_for_id)
-    token2_id = vocab.token_to_id(token2)
+    token = vocab.row_to_token(row_for_id)
+    token_id = vocab.token_to_id(token)
     print("\nRow -> Token -> ID")
     print("Row:", row_for_id.to_dict())
-    print("Token:", token2)
-    print("ID:", token2_id)
+    print("Token:", token)
+    print("ID:", token_id)
 
     # -------------------------
-    # 4) Unseen example -> UNK token and UNK id
+    # 3) Unseen example -> UNK token and UNK id
     # -------------------------
     unseen = pd.Series({"event_type": 3, "formulary_drug_cd": "NEW_DRUG"})
     unseen_token = vocab.row_to_token(unseen)
