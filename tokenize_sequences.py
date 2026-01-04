@@ -1,104 +1,56 @@
 """
-Responsibilities:
-- Convert token sequences (strings) into integer ID sequences using a fixed vocabulary
-- Handle unknown tokens via UNK_ID
-- Pad / truncate sequences to fixed max_len
-- Generate attention masks (1 for real tokens, 0 for padding)
+Tokenize sequences and pad/clip for transformer input.
+
+Adapted to project Vocabulary API:
+- vocab.token_to_id(token)
+- vocab.get_padding_token()
+- vocab.get_unknown_token()
 """
 
-from __future__ import annotations
+from typing import List, Tuple, Any
 
-from typing import Dict, List, Sequence, Tuple, Union, Optional
-
-
-TokenSeq = Union[List[str], str]  # allow list of tokens OR "A -> B -> C" string
-
-
-def _normalize_sequence(seq: TokenSeq) -> List[str]:
-    """
-    Ensures we always work with List[str].
-    Accepts:
-      - List[str]
-      - String formatted like: "[ADM] -> [DIAG_I10] -> [DEATH]"
-    """
-    if seq is None:
-        return []
-
-    # If it's already a list, clean it
-    if isinstance(seq, list):
-        return [str(t).strip() for t in seq if t is not None and str(t).strip() != ""]
-
-    # If it's a string, split by '->' (or fallback whitespace)
-    if isinstance(seq, str):
-        s = seq.strip()
-        if s == "":
-            return []
-        if "->" in s:
-            parts = [p.strip() for p in s.split("->")]
-            return [p for p in parts if p]
-        # fallback: whitespace split
-        parts = s.split()
-        return [p for p in parts if p]
-
-    # fallback: stringify
-    return [str(seq).strip()] if str(seq).strip() != "" else []
-
-
-def tokenize_and_pad(
-    sequences: Sequence[TokenSeq],
-    vocab: Dict[str, int],
+def tokenize_and_pad_from_tokens(
+    sequences: List[List[str]],
+    vocab,
     max_len: int = 512,
-    pad_id: int = 0,
-    unk_id: int = 1,
-    truncation: str = "keep_last",  # "keep_last" or "keep_first"
+    keep: str = "last",  # "last" or "first"
 ) -> Tuple[List[List[int]], List[List[int]]]:
     """
-    Convert sequences to padded/clipped transformer input.
-
-    Args:
-        sequences: list of sequences; each can be List[str] or a "->" string
-        vocab: token -> id mapping
-        max_len: final sequence length
-        pad_id: padding token id
-        unk_id: unknown token id
-        truncation: if too long:
-            - "keep_last": keep last max_len tokens (recommended for outcomes)
-            - "keep_first": keep first max_len tokens
+    Use this if Hauke already provides token strings, e.g.:
+    ["[ADM]", "[DIAG_I10]", "[MED_LISINOPRIL]", ...]
 
     Returns:
-        input_ids: List[List[int]] shape [N, max_len]
-        attention_masks: List[List[int]] shape [N, max_len]
+      input_ids: List[List[int]] shape [N, max_len]
+      attention_masks: List[List[int]] shape [N, max_len]
     """
-    if max_len <= 0:
-        raise ValueError("max_len must be > 0")
-
-    if truncation not in ("keep_last", "keep_first"):
-        raise ValueError("truncation must be 'keep_last' or 'keep_first'")
+    pad_id = vocab.token_to_id(vocab.get_padding_token())
+    unk_id = vocab.token_to_id(vocab.get_unknown_token())
 
     input_ids: List[List[int]] = []
     attention_masks: List[List[int]] = []
 
     for seq in sequences:
-        tokens = _normalize_sequence(seq)
-
-        # Token -> ID
-        ids = [vocab.get(tok, unk_id) for tok in tokens]
+        ids: List[int] = []
+        for tok in seq:
+            if tok is None or str(tok).strip() == "":
+                continue
+            # token_to_id already falls back to UNK id if unknown in your implementation
+            # but we keep it explicit-safe:
+            token_str = str(tok).strip()
+            token_id = vocab.token_to_id(token_str) if token_str else unk_id
+            ids.append(token_id)
 
         # Clip
         if len(ids) > max_len:
-            if truncation == "keep_first":
-                ids = ids[:max_len]
-            else:
-                ids = ids[-max_len:]  # keep_last
+            ids = ids[-max_len:] if keep == "last" else ids[:max_len]
 
-        # Mask before padding
+        # Attention mask (before padding)
         mask = [1] * len(ids)
 
         # Pad
-        if len(ids) < max_len:
-            pad_n = max_len - len(ids)
-            ids = ids + [pad_id] * pad_n
-            mask = mask + [0] * pad_n
+        while len(ids) < max_len:
+            ids.append(pad_id)
+            mask.append(0)
 
         input_ids.append(ids)
         attention_masks.append(mask)
@@ -106,69 +58,99 @@ def tokenize_and_pad(
     return input_ids, attention_masks
 
 
-def quick_stats(
-    input_ids: List[List[int]],
-    attention_masks: List[List[int]],
-    pad_id: int = 0,
-) -> Dict[str, float]:
+def tokenize_and_pad_from_rows(
+    sequences: List[List[Any]],
+    vocab,
+    max_len: int = 512,
+    keep: str = "last",  # "last" or "first"
+) -> Tuple[List[List[int]], List[List[int]]]:
     """
-    Optional helper to sanity-check outputs.
+    Use this if you receive sequences as rows/events (e.g. pd.Series dict-like),
+    and you want to convert row -> token via vocab.row_to_token(row).
+
+    Example row must contain at least:
+      - event_type
+      - icd_code, icd_version (for diag/proc)
+      - formulary_drug_cd (for med)
     """
-    n = len(input_ids)
-    if n == 0:
-        return {"n": 0, "avg_len": 0.0, "pad_rate": 0.0}
+    pad_id = vocab.token_to_id(vocab.get_padding_token())
+    unk_id = vocab.token_to_id(vocab.get_unknown_token())
 
-    max_len = len(input_ids[0])
-    real_lens = []
-    pad_count = 0
+    input_ids: List[List[int]] = []
+    attention_masks: List[List[int]] = []
 
-    for ids, m in zip(input_ids, attention_masks):
-        real_len = sum(m)
-        real_lens.append(real_len)
-        pad_count += sum(1 for x in ids if x == pad_id)
+    for seq_rows in sequences:
+        ids: List[int] = []
+        for row in seq_rows:
+            token = vocab.row_to_token(row)  # returns token or global [UNK]
+            token_id = vocab.token_to_id(token)  # maps to int (UNK if unknown)
+            ids.append(token_id)
 
-    total_tokens = n * max_len
-    return {
-        "n": float(n),
-        "avg_len": float(sum(real_lens) / n),
-        "pad_rate": float(pad_count / total_tokens),
-    }
+        # Clip
+        if len(ids) > max_len:
+            ids = ids[-max_len:] if keep == "last" else ids[:max_len]
+
+        # Attention mask (before padding)
+        mask = [1] * len(ids)
+
+        # Pad
+        while len(ids) < max_len:
+            ids.append(pad_id)
+            mask.append(0)
+
+        input_ids.append(ids)
+        attention_masks.append(mask)
+
+    return input_ids, attention_masks
 
 
 if __name__ == "__main__":
-    # Simple local test
-    sequences = [
-        ["[ADM]", "[DIAG_I10]", "[MED_LISINOPRIL]", "[READM]"],
-        "[ADM] -> [PROC9_5491] -> [DEATH]",   # also works (string with arrows)
-        ["[ADM]", "[UNKNOWN_TOKEN]"],
-    ]
+    # Minimal smoke test with the Vocabulary class you posted
+    import pandas as pd
 
-    vocab = {
-        "[PAD]": 0,
-        "[UNK]": 1,
-        "[ADM]": 10,
-        "[READM]": 11,
-        "[DEATH]": 12,
-        "[DIAG_I10]": 20001,
-        "[PROC9_5491]": 30001,
-        "[MED_LISINOPRIL]": 40001,
-    }
-
-    input_ids, masks = tokenize_and_pad(
-        sequences=sequences,
-        vocab=vocab,
-        max_len=8,
-        pad_id=vocab["[PAD]"],
-        unk_id=vocab["[UNK]"],
-        truncation="keep_last",
+    # Build a toy dataframe for vocab construction
+    df = pd.DataFrame(
+        [
+            {"event_type": 0},
+            {"event_type": 1, "icd_code": "I10", "icd_version": 10},
+            {"event_type": 1, "icd_code": "E11", "icd_version": 10},
+            {"event_type": 2, "icd_code": "5491", "icd_version": 9},
+            {"event_type": 3, "formulary_drug_cd": "LISINOPRIL"},
+            {"event_type": 4},
+            {"event_type": 5},
+        ]
     )
 
-    print("Input IDs:")
-    for row in input_ids:
-        print(row)
+    # Import your Vocabulary from wherever it lives in your project.
+    # If it's in vocabulary.py in the same folder, you would do:
+    # from vocabulary import Vocabulary
+    # For this snippet, assume Vocabulary is available in scope.
+    from vocabulary import Vocabulary  # adjust path/name to your repo
 
-    print("\nAttention Masks:")
+    vocab = Vocabulary(df)
+
+    # ---- Test A: already-tokenized sequences (strings) ----
+    token_sequences = [
+        ["[ADM]", "[DIAG_I10]", "[MED_LISINOPRIL]", "[DEATH]"],
+        ["[ADM]", "[DIAG_E11]", "[READM]"],
+        ["[ADM]", "[MED_NEW_DRUG]"],  # should become UNK for the med token
+    ]
+
+    ids, masks = tokenize_and_pad_from_tokens(token_sequences, vocab, max_len=6, keep="last")
+    print("\nToken sequences -> input_ids:")
+    for row in ids:
+        print(row)
+    print("\nToken sequences -> attention_masks:")
     for row in masks:
         print(row)
 
-    print("\nStats:", quick_stats(input_ids, masks, pad_id=vocab["[PAD]"]))
+    # ---- Test B: row-based sequences (events) ----
+    row_sequences = [
+        [df.iloc[0], df.iloc[1], df.iloc[4], df.iloc[6]],  # ADM, DIAG I10, MED LISINOPRIL, DEATH
+        [df.iloc[0], df.iloc[2], df.iloc[5]],              # ADM, DIAG E11, READM
+    ]
+
+    ids2, masks2 = tokenize_and_pad_from_rows(row_sequences, vocab, max_len=6, keep="last")
+    print("\nRow sequences -> input_ids:")
+    for row in ids2:
+        print
