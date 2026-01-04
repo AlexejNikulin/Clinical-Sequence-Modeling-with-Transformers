@@ -55,7 +55,6 @@ idx = 0
 for patient_file in tqdm(patient_files, desc="Merging patients"):
     patient_id = int(patient_file.split(".")[0])
 
-    print(PATIENT_CSV_PATH + patient_file)
     patient_df = pd.read_csv(PATIENT_CSV_PATH + patient_file).sort_values(["timestamp"])
     
     write_mode = 'w' if idx == 0 else 'a' # write / append
@@ -68,7 +67,7 @@ for patient_file in tqdm(patient_files, desc="Merging patients"):
         index=False
     )
 
-    os.remove(PATIENT_CSV_PATH + patient_file)
+    # os.remove(PATIENT_CSV_PATH + patient_file)
 
     idx += 1
 
