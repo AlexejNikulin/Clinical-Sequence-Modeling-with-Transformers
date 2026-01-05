@@ -3,8 +3,6 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Any, Dict, Optional
 import pandas as pd
-import json
-from pathlib import Path
  
 class EventType(IntEnum):
     ADMISSION = 0
@@ -41,7 +39,7 @@ class TokenConverter:
             return self.proc_to_token(icd_code, is_icd_10)
  
         elif event == EventType.MEDICATION:
-            drug_cd = str(row["medication"]).strip()
+            drug_cd = str(row["formulary_drug_cd"]).strip()
             return self.med_to_token(drug_cd)
  
         elif event == EventType.READMISSION:
@@ -122,45 +120,6 @@ class Vocabulary:
  
         self._init_special_tokens()
         self.build_from_dataframe(df)
-
-        # ------------------------
-    # Save vocabulary to disk
-    # ------------------------
-    def save(self, path: str | Path):
-        path = Path(path)
-        data = {
-            "special": self.special_vocab,
-            "admission": self.admission_vocab,
-            "diagnosis": self.diagnosis_vocab,
-            "procedure": self.procedure_vocab,
-            "medication": self.medication_vocab,
-            "readmission": self.readmission_vocab,
-            "death": self.death_vocab,
-        }
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-
-    # ------------------------
-    # Load vocabulary from disk
-    # ------------------------
-    @classmethod
-    def load(cls, path: str | Path):
-        path = Path(path)
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        vocab = cls.__new__(cls)  # um __init__(df) zu umgehen
-        vocab.token_converter = TokenConverter()
-
-        vocab.special_vocab = data["special"]
-        vocab.admission_vocab = data["admission"]
-        vocab.diagnosis_vocab = data["diagnosis"]
-        vocab.procedure_vocab = data["procedure"]
-        vocab.medication_vocab = data["medication"]
-        vocab.readmission_vocab = data["readmission"]
-        vocab.death_vocab = data["death"]
-
-        return vocab
  
     # -------------------------
     # Special tokens init (global)
@@ -307,84 +266,68 @@ class Vocabulary:
     def get_masking_token(self) -> str:
         return self.MASK
  
- #-----------MAIN CODE--------------
 if __name__ == "__main__":
-
-    VOCAB_PATH = Path("../out/vocab/vocabulary.json")
-    COMBINED_CSV = Path("../out/merge_and_sort/combined.csv")
-
-    # ------------------------------------
-    # Load or build vocabulary
-    # ------------------------------------
-    if VOCAB_PATH.exists():
-        vocab = Vocabulary.load(VOCAB_PATH)
-
-    else:
-        print("Vocabulary not found. Building new vocabulary...")
-        df = pd.read_csv(COMBINED_CSV)
-        vocab = Vocabulary(df)
-        VOCAB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        vocab.save(VOCAB_PATH)
+    import pandas as pd
  
-    # # -------------------------
-    # # Example data (toy)
-    # # -------------------------
-    # df = pd.DataFrame(
-    #     [
-    #         {"event_type": 0},
-    #         {"event_type": 1, "icd_code": "I10", "icd_version": 10},
-    #         {"event_type": 1, "icd_code": "E11", "icd_version": 10},
-    #         {"event_type": 2, "icd_code": "5491", "icd_version": 9},
-    #         {"event_type": 3, "medication": "LISINOPRIL"},
-    #         {"event_type": 4},
-    #         {"event_type": 5},
-    #     ]
-    # )
+    # -------------------------
+    # Example data (toy)
+    # -------------------------
+    df = pd.DataFrame(
+        [
+            {"event_type": 0},
+            {"event_type": 1, "icd_code": "I10", "icd_version": 10},
+            {"event_type": 1, "icd_code": "E11", "icd_version": 10},
+            {"event_type": 2, "icd_code": "5491", "icd_version": 9},
+            {"event_type": 3, "formulary_drug_cd": "LISINOPRIL"},
+            {"event_type": 4},
+            {"event_type": 5},
+        ]
+    )
  
-    # vocab = Vocabulary(df)
+    vocab = Vocabulary(df)
  
-    # # -------------------------
-    # # 1) Print vocabularies
-    # # -------------------------
-    # print("\n=== SPECIAL VOCAB ===")
-    # print(vocab.special_vocab)
+    # -------------------------
+    # 1) Print vocabularies
+    # -------------------------
+    print("\n=== SPECIAL VOCAB ===")
+    print(vocab.special_vocab)
  
-    # print("\n=== ADMISSION VOCAB ===")
-    # print(vocab.admission_vocab)
+    print("\n=== ADMISSION VOCAB ===")
+    print(vocab.admission_vocab)
  
-    # print("\n=== DIAGNOSIS VOCAB ===")
-    # print(vocab.diagnosis_vocab)
+    print("\n=== DIAGNOSIS VOCAB ===")
+    print(vocab.diagnosis_vocab)
  
-    # print("\n=== PROCEDURE VOCAB ===")
-    # print(vocab.procedure_vocab)
+    print("\n=== PROCEDURE VOCAB ===")
+    print(vocab.procedure_vocab)
  
-    # print("\n=== MEDICATION VOCAB ===")
-    # print(vocab.medication_vocab)
+    print("\n=== MEDICATION VOCAB ===")
+    print(vocab.medication_vocab)
  
-    # print("\n=== READMISSION VOCAB ===")
-    # print(vocab.readmission_vocab)
+    print("\n=== READMISSION VOCAB ===")
+    print(vocab.readmission_vocab)
  
-    # print("\n=== DEATH VOCAB ===")
-    # print(vocab.death_vocab)
+    print("\n=== DEATH VOCAB ===")
+    print(vocab.death_vocab)
  
-    # # -------------------------
-    # # 2) From another row -> ID (token -> id)
-    # # -------------------------
-    # row_for_id = df.iloc[4]  # MED LISINOPRIL
-    # token = vocab.row_to_token(row_for_id)
-    # token_id = vocab.token_to_id(token)
-    # print("\nRow -> Token -> ID")
-    # print("Row:", row_for_id.to_dict())
-    # print("Token:", token)
-    # print("ID:", token_id)
+    # -------------------------
+    # 2) From another row -> ID (token -> id)
+    # -------------------------
+    row_for_id = df.iloc[4]  # MED LISINOPRIL
+    token = vocab.row_to_token(row_for_id)
+    token_id = vocab.token_to_id(token)
+    print("\nRow -> Token -> ID")
+    print("Row:", row_for_id.to_dict())
+    print("Token:", token)
+    print("ID:", token_id)
  
-    # # -------------------------
-    # # 3) Unseen example -> UNK token and UNK id
-    # # -------------------------
-    # unseen = pd.Series({"event_type": 3, "medication": "NEW_DRUG"})
-    # unseen_token = vocab.row_to_token(unseen)
-    # unseen_id = vocab.token_to_id(unseen_token)
-    # print("\nUnseen row -> Token -> ID")
-    # print("Row:", dict(unseen))
-    # print("Token:", unseen_token)
-    # print("ID:", unseen_id)
+    # -------------------------
+    # 3) Unseen example -> UNK token and UNK id
+    # -------------------------
+    unseen = pd.Series({"event_type": 3, "formulary_drug_cd": "NEW_DRUG"})
+    unseen_token = vocab.row_to_token(unseen)
+    unseen_id = vocab.token_to_id(unseen_token)
+    print("\nUnseen row -> Token -> ID")
+    print("Row:", dict(unseen))
+    print("Token:", unseen_token)
+    print("ID:", unseen_id)
