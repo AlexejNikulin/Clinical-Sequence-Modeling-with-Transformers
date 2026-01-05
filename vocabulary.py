@@ -8,10 +8,10 @@ from pathlib import Path
  
 class EventType(IntEnum):
     ADMISSION = 0
-    READMISSION = 1
-    DIAGNOSE = 2
-    LABEVENTS = 3
-    MEDICATION = 4
+    DIAGNOSE = 1
+    PROCEDURE = 2
+    MEDICATION = 3
+    READMISSION = 4
     DEATH = 5
  
 class TokenConverter:
@@ -29,19 +29,19 @@ class TokenConverter:
             return self.adm_to_token()
  
         elif event == EventType.DIAGNOSE:
-            icd_code = str(row["event_value"]).strip()
-            #icd_version = row["icd_version"]
-            #is_icd_10 = int(icd_version) == 10)
-            return self.diag_to_token(icd_code, True)
+            icd_code = str(row["icd_code"]).strip()
+            icd_version = row["icd_version"]
+            is_icd_10 = int(icd_version) == 10
+            return self.diag_to_token(icd_code, is_icd_10)
  
-        elif event == EventType.LABEVENTS:
-            icd_code = str(row["event_value"]).strip()
-            #icd_version = row["icd_version"]
-            #is_icd_10 = int(icd_version) == 10
-            return self.lab_to_token(icd_code)
+        elif event == EventType.PROCEDURE:
+            icd_code = str(row["icd_code"]).strip()
+            icd_version = row["icd_version"]
+            is_icd_10 = int(icd_version) == 10
+            return self.proc_to_token(icd_code, is_icd_10)
  
         elif event == EventType.MEDICATION:
-            drug_cd = str(row["event_value"]).strip()
+            drug_cd = str(row["medication"]).strip()
             return self.med_to_token(drug_cd)
  
         elif event == EventType.READMISSION:
@@ -62,10 +62,10 @@ class TokenConverter:
         return "[DEATH]"
  
     def diag_to_token(self, icd_code: str, is_icd_10: bool) -> str:
-        return f"[DIAG{icd_code}]" if is_icd_10 else f"[DIAG9_{icd_code}]"
+        return f"[DIAG_{icd_code}]" if is_icd_10 else f"[DIAG9_{icd_code}]"
  
-    def lab_to_token(self, icd_code: str) -> str:
-        return f"[LAB_{icd_code}]"
+    def proc_to_token(self, icd_code: str, is_icd_10: bool) -> str:
+        return f"[PROC_{icd_code}]" if is_icd_10 else f"[PROC9_{icd_code}]"
  
     def med_to_token(self, drug_cd: str) -> str:
         return f"[MED_{drug_cd}]"
@@ -90,7 +90,7 @@ class Vocabulary:
     special_vocab: Dict[str, int] = field(default_factory=dict)
     admission_vocab: Dict[str, int] = field(default_factory=dict)
     diagnosis_vocab: Dict[str, int] = field(default_factory=dict)
-    labevents_vocab: Dict[str, int] = field(default_factory=dict)
+    procedure_vocab: Dict[str, int] = field(default_factory=dict)
     medication_vocab: Dict[str, int] = field(default_factory=dict)
     readmission_vocab: Dict[str, int] = field(default_factory=dict)
     death_vocab: Dict[str, int] = field(default_factory=dict)
@@ -104,7 +104,7 @@ class Vocabulary:
     _next_special: int = 0
     _next_adm: int = 10000
     _next_diag: int = 20000
-    _next_labev: int = 30000
+    _next_proc: int = 30000
     _next_med: int = 40000
     _next_readm: int = 50000
     _next_death: int = 60000
@@ -115,7 +115,7 @@ class Vocabulary:
         self.special_vocab = {}
         self.admission_vocab = {}
         self.diagnosis_vocab = {}
-        self.labevents_vocab = {}
+        self.procedure_vocab = {}
         self.medication_vocab = {}
         self.readmission_vocab = {}
         self.death_vocab = {}
@@ -123,7 +123,7 @@ class Vocabulary:
         self._init_special_tokens()
         self.build_from_dataframe(df)
  
-    # ------------------------
+        # ------------------------
     # Save vocabulary to disk
     # ------------------------
     def save(self, path: str | Path):
@@ -132,7 +132,7 @@ class Vocabulary:
             "special": self.special_vocab,
             "admission": self.admission_vocab,
             "diagnosis": self.diagnosis_vocab,
-            "labevents": self.labevents_vocab,
+            "procedure": self.procedure_vocab,
             "medication": self.medication_vocab,
             "readmission": self.readmission_vocab,
             "death": self.death_vocab,
@@ -155,7 +155,7 @@ class Vocabulary:
         vocab.special_vocab = data["special"]
         vocab.admission_vocab = data["admission"]
         vocab.diagnosis_vocab = data["diagnosis"]
-        vocab.labevents_vocab = data["labevents"]
+        vocab.procedure_vocab = data["procedure"]
         vocab.medication_vocab = data["medication"]
         vocab.readmission_vocab = data["readmission"]
         vocab.death_vocab = data["death"]
@@ -212,12 +212,12 @@ class Vocabulary:
             vocab[token] = new_id
             self._next_diag += 1
  
-        elif event == EventType.LABEVENTS:
-            new_id = self._next_labev
+        elif event == EventType.PROCEDURE:
+            new_id = self._next_proc
             if new_id > 39999:
-                raise RuntimeError("Labevents vocab exceeded 30000..39999 range.")
+                raise RuntimeError("Procedure vocab exceeded 30000..39999 range.")
             vocab[token] = new_id
-            self._next_labev += 1
+            self._next_proc += 1
  
         elif event == EventType.MEDICATION:
             new_id = self._next_med
@@ -245,8 +245,8 @@ class Vocabulary:
             return self.admission_vocab
         if event == EventType.DIAGNOSE:
             return self.diagnosis_vocab
-        if event == EventType.LABEVENTS:
-            return self.labevents_vocab
+        if event == EventType.PROCEDURE:
+            return self.procedure_vocab
         if event == EventType.MEDICATION:
             return self.medication_vocab
         if event == EventType.READMISSION:
@@ -287,8 +287,8 @@ class Vocabulary:
             return self.admission_vocab[token]
         if token in self.diagnosis_vocab:
             return self.diagnosis_vocab[token]
-        if token in self.labevents_vocab:
-            return self.labevents_vocab[token]
+        if token in self.procedure_vocab:
+            return self.procedure_vocab[token]
         if token in self.medication_vocab:
             return self.medication_vocab[token]
         if token in self.readmission_vocab:
@@ -318,25 +318,6 @@ if __name__ == "__main__":
     # ------------------------------------
     if VOCAB_PATH.exists():
         vocab = Vocabulary.load(VOCAB_PATH)
-
-        print("Vocabulary loaded. Converting 10 random rows to tokens...\n")
-
-        df = pd.read_csv(COMBINED_CSV)
-
-        # 10 zufällige Zeilen
-        sample_df = df.sample(n=10, random_state=42)
-
-        for idx, row in sample_df.iterrows():
-            # Variante A: über Vocabulary (empfohlen, falls vorhanden)
-            token = vocab.row_to_token(row)
-
-            # Variante B: direkt über TokenConverter
-            # token = vocab.token_converter.convert_to_token(row)
-
-            print(f"Row index: {idx}")
-            print(f"Event type: {row['event_type']}")
-            print(f"Token     : {token}")
-            print("-" * 40)
  
     else:
         print("Vocabulary not found. Building new vocabulary...")
