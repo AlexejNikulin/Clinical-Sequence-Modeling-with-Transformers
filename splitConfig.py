@@ -32,10 +32,10 @@ class SplitConfig:
 
 # Update these to local MIMIC-IV paths (csv or csv.gz).
 PATHS: Dict[str, str] = {
-    "admissions": "mimic-iv/hosp/admissions.csv.gz",
-    "diagnoses_icd": "mimic-iv/hosp/diagnoses_icd.csv.gz",
-    "prescriptions": "mimic-iv/hosp/prescriptions.csv.gz",
-    "labevents": "mimic-iv/hosp/labevents.csv.gz",
+    "admissions": "mimic-iv/hosp/admissions.csv",
+    "diagnoses_icd": "mimic-iv/hosp/diagnoses_icd.csv",
+    "prescriptions": "mimic-iv/hosp/prescriptions.csv",
+    "labevents": "mimic-iv/hosp/labevents.csv",
 }
 
 # Optional: speed up loads by selecting columns (must include subject_id).
