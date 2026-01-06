@@ -9,6 +9,7 @@ Adapted to project Vocabulary API:
 
 from typing import List, Tuple, Any
 
+
 def tokenize_and_pad_from_tokens(
     sequences: List[List[str]],
     vocab,
@@ -16,7 +17,7 @@ def tokenize_and_pad_from_tokens(
     keep: str = "last",  # "last" or "first"
 ) -> Tuple[List[List[int]], List[List[int]]]:
     """
-    Use this if Hauke already provides token strings, e.g.:
+    Use this if sequences are already provided as token strings, e.g.:
     ["[ADM]", "[DIAG_I10]", "[MED_LISINOPRIL]", ...]
 
     Returns:
@@ -31,11 +32,10 @@ def tokenize_and_pad_from_tokens(
 
     for seq in sequences:
         ids: List[int] = []
+
         for tok in seq:
             if tok is None or str(tok).strip() == "":
                 continue
-            # token_to_id already falls back to UNK id if unknown in your implementation
-            # but we keep it explicit-safe:
             token_str = str(tok).strip()
             token_id = vocab.token_to_id(token_str) if token_str else unk_id
             ids.append(token_id)
@@ -65,13 +65,8 @@ def tokenize_and_pad_from_rows(
     keep: str = "last",  # "last" or "first"
 ) -> Tuple[List[List[int]], List[List[int]]]:
     """
-    Use this if you receive sequences as rows/events (e.g. pd.Series dict-like),
-    and you want to convert row -> token via vocab.row_to_token(row).
-
-    Example row must contain at least:
-      - event_type
-      - icd_code, icd_version (for diag/proc)
-      - formulary_drug_cd (for med)
+    Use this if sequences are provided as event rows (e.g. pd.Series),
+    and tokens are generated via vocab.row_to_token(row).
     """
     pad_id = vocab.token_to_id(vocab.get_padding_token())
     unk_id = vocab.token_to_id(vocab.get_unknown_token())
@@ -81,9 +76,10 @@ def tokenize_and_pad_from_rows(
 
     for seq_rows in sequences:
         ids: List[int] = []
+
         for row in seq_rows:
-            token = vocab.row_to_token(row)  # returns token or global [UNK]
-            token_id = vocab.token_to_id(token)  # maps to int (UNK if unknown)
+            token = vocab.row_to_token(row)
+            token_id = vocab.token_to_id(token)
             ids.append(token_id)
 
         # Clip
@@ -105,10 +101,11 @@ def tokenize_and_pad_from_rows(
 
 
 if __name__ == "__main__":
-    # Minimal smoke test with the Vocabulary class you posted
+    # Minimal smoke test
     import pandas as pd
+    from vocabulary import Vocabulary
 
-    # Build a toy dataframe for vocab construction
+    # Build a toy dataframe for vocabulary construction
     df = pd.DataFrame(
         [
             {"event_type": 0},
@@ -121,36 +118,35 @@ if __name__ == "__main__":
         ]
     )
 
-    # Import your Vocabulary from wherever it lives in your project.
-    # If it's in vocabulary.py in the same folder, you would do:
-    # from vocabulary import Vocabulary
-    # For this snippet, assume Vocabulary is available in scope.
-    from vocabulary import Vocabulary  # adjust path/name to your repo
-
     vocab = Vocabulary(df)
 
-    # ---- Test A: already-tokenized sequences (strings) ----
+    # ---- Test A: token-based sequences ----
     token_sequences = [
         ["[ADM]", "[DIAG_I10]", "[MED_LISINOPRIL]", "[DEATH]"],
         ["[ADM]", "[DIAG_E11]", "[READM]"],
-        ["[ADM]", "[MED_NEW_DRUG]"],  # should become UNK for the med token
+        ["[ADM]", "[MED_NEW_DRUG]"],  # should map to UNK
     ]
 
-    ids, masks = tokenize_and_pad_from_tokens(token_sequences, vocab, max_len=6, keep="last")
-    print("\nToken sequences -> input_ids:")
+    ids, masks = tokenize_and_pad_from_tokens(token_sequences, vocab, max_len=6)
+    print("\nToken-based sequences -> input_ids:")
     for row in ids:
         print(row)
-    print("\nToken sequences -> attention_masks:")
+
+    print("\nToken-based sequences -> attention_masks:")
     for row in masks:
         print(row)
 
-    # ---- Test B: row-based sequences (events) ----
+    # ---- Test B: row-based sequences ----
     row_sequences = [
-        [df.iloc[0], df.iloc[1], df.iloc[4], df.iloc[6]],  # ADM, DIAG I10, MED LISINOPRIL, DEATH
-        [df.iloc[0], df.iloc[2], df.iloc[5]],              # ADM, DIAG E11, READM
+        [df.iloc[0], df.iloc[1], df.iloc[4], df.iloc[6]],
+        [df.iloc[0], df.iloc[2], df.iloc[5]],
     ]
 
-    ids2, masks2 = tokenize_and_pad_from_rows(row_sequences, vocab, max_len=6, keep="last")
-    print("\nRow sequences -> input_ids:")
+    ids2, masks2 = tokenize_and_pad_from_rows(row_sequences, vocab, max_len=6)
+    print("\nRow-based sequences -> input_ids:")
     for row in ids2:
-        print
+        print(row)
+
+    print("\nRow-based sequences -> attention_masks:")
+    for row in masks2:
+        print(row)
