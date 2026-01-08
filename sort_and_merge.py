@@ -3,17 +3,17 @@ from tqdm import tqdm
 import os
 
 
-ADMISSION_CSV = "./out/extract_patient_level_events/events_dynamic_admissions.csv"
-DIAGNOSES_CSV = "./out/extract_patient_level_events/events_dynamic_diagnoses_icd.csv"
-DISCHARGES_CSV = "./out/extract_patient_level_events/events_dynamic_discharges.csv"
-MEDICATION_CSV = "./out/extract_patient_level_events/events_dynamic_emar.csv"
-LABEVENTS_CSV = "./out/extract_patient_level_events/events_dynamic_labevents.csv"
+ADMISSION_CSV = "../out/extract_patient_level_events/events_dynamic_admissions.csv"
+DIAGNOSES_CSV = "../out/extract_patient_level_events/events_dynamic_diagnoses_icd.csv"
+DISCHARGES_CSV = "../out/extract_patient_level_events/events_dynamic_discharges.csv"
+MEDICATION_CSV = "../out/extract_patient_level_events/events_dynamic_emar.csv"
+LABEVENTS_CSV = "../out/extract_patient_level_events/events_dynamic_labevents.csv"
 
-PATIENT_CSV_PATH = "./out/merge_and_sort/patients/"
-PATIENTS_CSV = "./physionet.org/files/hosp/patients.csv"  
-patients_df = pd.read_csv(PATIENTS_CSV, usecols=["subject_id","gender","anchor_age","anchor_year_group"])
+PATIENT_CSV_PATH = "../out/merge_and_sort/patients/"
+PATIENTS_CSV = "../physionet.org/files/mimiciv/3.1/hosp/patients.csv"  
+patients_df = pd.read_csv(PATIENTS_CSV, usecols=["subject_id","gender","anchor_age","anchor_year_group","dod"])
 patients_df = patients_df.set_index("subject_id")
-FINAL_CSV_PATH = "./out/merge_and_sort/combined.csv"
+FINAL_CSV_PATH = "../out/merge_and_sort/combined.csv"
 
 def yeargrp_tok(x):
     if pd.isna(x): 
@@ -93,11 +93,17 @@ patient_files = os.listdir(PATIENT_CSV_PATH)
 idx = 0
 for patient_file in tqdm(patient_files, desc="Merging patients"):
     patient_id = int(patient_file.split(".")[0])
+    patient_row = patients_df.loc[patient_id]
 
     patient_df = pd.read_csv(PATIENT_CSV_PATH + patient_file)
     demo_df = make_demo_df(patient_id)
 
     patient_df = pd.concat([demo_df, patient_df], ignore_index=True)
+
+    if patient_row["dod"] is not None and patient_row["dod"] != "NaN":
+        death_timestamp = f"{patient_row['dod']} 00:00:00"
+        death_row = pd.DataFrame({"subject_id": patient_id, "timestamp": death_timestamp, "event_type": 5, "event_value": "", "source": "patients"}, index=[0])
+        patient_df = pd.concat([patient_df, death_row], ignore_index=True)
 
     patient_df["timestamp"] = pd.to_datetime(patient_df["timestamp"], errors="coerce")
     patient_df = patient_df.dropna(subset=["timestamp"])
@@ -119,6 +125,4 @@ for patient_file in tqdm(patient_files, desc="Merging patients"):
     idx += 1
 
 # What's still missing
-# - death
-# - readmission
 # - procedure
