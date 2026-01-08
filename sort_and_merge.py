@@ -2,14 +2,53 @@ import pandas as pd
 from tqdm import tqdm
 import os
 
-ADMISSION_CSV = "../out/extract_patient_level_events/events_dynamic_admissions.csv"
-DIAGNOSES_CSV = "../out/extract_patient_level_events/events_dynamic_diagnoses_icd.csv"
-DISCHARGES_CSV = "../out/extract_patient_level_events/events_dynamic_discharges.csv"
-MEDICATION_CSV = "../out/extract_patient_level_events/events_dynamic_emar.csv"
-LABEVENTS_CSV = "../out/extract_patient_level_events/events_dynamic_labevents.csv"
 
-PATIENT_CSV_PATH = "../out/merge_and_sort/patients/"
-FINAL_CSV_PATH = "../out/merge_and_sort/combined.csv"
+ADMISSION_CSV = "./out/extract_patient_level_events/events_dynamic_admissions.csv"
+DIAGNOSES_CSV = "./out/extract_patient_level_events/events_dynamic_diagnoses_icd.csv"
+DISCHARGES_CSV = "./out/extract_patient_level_events/events_dynamic_discharges.csv"
+MEDICATION_CSV = "./out/extract_patient_level_events/events_dynamic_emar.csv"
+LABEVENTS_CSV = "./out/extract_patient_level_events/events_dynamic_labevents.csv"
+
+PATIENT_CSV_PATH = "./out/merge_and_sort/patients/"
+PATIENTS_CSV = "./physionet.org/files/hosp/patients.csv"  
+patients_df = pd.read_csv(PATIENTS_CSV, usecols=["subject_id","gender","anchor_age","anchor_year_group"])
+patients_df = patients_df.set_index("subject_id")
+FINAL_CSV_PATH = "./out/merge_and_sort/combined.csv"
+
+def yeargrp_tok(x):
+    if pd.isna(x): 
+        return "DEM_YEARGRP_UNK"
+    s = str(x).strip().replace(" ", "").replace("-", "_")
+    return f"DEM_YEARGRP_{s}"
+
+def gender_tok(x):
+    if pd.isna(x): 
+        return "DEM_GENDER_UNK"
+    return f"DEM_GENDER_{str(x).strip().upper()}"
+
+def age_tok(x):
+    if pd.isna(x):
+        return "DEM_AGE_UNK"
+    a = int(x)
+    if a >= 90:
+        return "DEM_AGE_90PLUS"
+    return f"DEM_AGE_{a}"
+
+def make_demo_df(subject_id):
+    if subject_id not in patients_df.index:
+        return pd.DataFrame(columns=["subject_id","timestamp","event_type","event_value","source"])
+    
+    row = patients_df.loc[subject_id]
+    toks = [gender_tok(row["gender"]), age_tok(row["anchor_age"]), yeargrp_tok(row["anchor_year_group"])]
+
+    return pd.DataFrame({
+        "subject_id": [subject_id]*len(toks),
+        "timestamp":  ["1900-01-01 00:00:00"]*len(toks),  
+        "event_type": ["DEM"]*len(toks),
+        "event_value": toks,
+        "source":     ["patients"]*len(toks),
+    })
+
 
 admissions_df = pd.read_csv(ADMISSION_CSV)
 subject_ids = admissions_df["subject_id"].unique()
@@ -55,7 +94,15 @@ idx = 0
 for patient_file in tqdm(patient_files, desc="Merging patients"):
     patient_id = int(patient_file.split(".")[0])
 
-    patient_df = pd.read_csv(PATIENT_CSV_PATH + patient_file).sort_values(["timestamp"])
+    patient_df = pd.read_csv(PATIENT_CSV_PATH + patient_file)
+    demo_df = make_demo_df(patient_id)
+
+    patient_df = pd.concat([demo_df, patient_df], ignore_index=True)
+
+    patient_df["timestamp"] = pd.to_datetime(patient_df["timestamp"], errors="coerce")
+    patient_df = patient_df.dropna(subset=["timestamp"])
+    patient_df = patient_df.sort_values(["timestamp"])
+
     
     write_mode = 'w' if idx == 0 else 'a' # write / append
     write_header = (idx == 0)
