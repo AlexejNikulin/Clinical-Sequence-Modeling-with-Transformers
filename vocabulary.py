@@ -325,6 +325,27 @@ if __name__ == "__main__":
  
         # 10 zufällige Zeilen
         sample_df = df.sample(n=10, random_state=42)
+
+        print("\n=== SPECIAL VOCAB ===")
+        print(vocab.special_vocab)
+    
+        print("\n=== ADMISSION VOCAB ===")
+        print(vocab.admission_vocab)
+    
+        print("\n=== DIAGNOSIS VOCAB ===")
+        print(vocab.diagnosis_vocab)
+    
+        print("\n=== PROCEDURE VOCAB ===")
+        print(vocab.labevents_vocab)
+    
+        print("\n=== MEDICATION VOCAB ===")
+        print(vocab.medication_vocab)
+    
+        print("\n=== READMISSION VOCAB ===")
+        print(vocab.readmission_vocab)
+    
+        print("\n=== DEATH VOCAB ===")
+        print(vocab.death_vocab)
  
         for idx, row in sample_df.iterrows():
             # Variante A: über Vocabulary (empfohlen, falls vorhanden)
@@ -333,7 +354,7 @@ if __name__ == "__main__":
             # Variante B: direkt über TokenConverter
             # token = vocab.token_converter.convert_to_token(row)
  
-            print(f"Row index: {idx}")
+            print(f"Row: {row}")
             print(f"Event type: {row['event_type']}")
             print(f"Token     : {token}")
             print("-" * 40)
