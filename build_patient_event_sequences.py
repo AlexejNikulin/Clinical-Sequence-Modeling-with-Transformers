@@ -61,10 +61,8 @@ def build_patient_event_sequences(
     for subject_id, group in df.groupby("subject_id"):
         patient_sequence = []
 
-        # Patient-level token first
         patient_sequence.append(f"patient::{subject_id}")
 
-        # Then time-ordered events
         patient_sequence.extend(group["event_string"].tolist())
 
         sequences.append(patient_sequence)
@@ -200,3 +198,4 @@ def visualize_sequence(df, subject_id):
 # Example:
 # subject_id = 15889559
 # visualize_sequence(df, subject_id)
+
