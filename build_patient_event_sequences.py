@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import pydot
 from IPython.display import Image
 
-
+from pathlib import Path
 
 SOURCE_TO_STAGE = {
     "admissions": "Admission",
@@ -196,6 +196,9 @@ def visualize_sequence(df, subject_id):
 
 
 # Example:
-# subject_id = 15889559
-# visualize_sequence(df, subject_id)
+COMBINED_CSV = Path("../out/merge_and_sort/combined.csv")
+df = pd.read_csv(COMBINED_CSV)
+
+subject_id = 10000032
+visualize_sequence(df, subject_id)
 
