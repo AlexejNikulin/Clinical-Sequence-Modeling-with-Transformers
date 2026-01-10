@@ -15,12 +15,12 @@ VAL_RATIO = 0.20  # test is remainder
 
 # Input / output
 COMBINED_PATH = Path("../out/merge_and_sort/combined.csv")        # or "data/combined.csv"
-OUT_DIR = "splits_out"
+OUT_DIR = "../out/splits_out"
 OUT_BASENAME = "combined"               # produces combined_train/val/test.*
 
 # Performance / memory
 CHUNKSIZE = 500_000                     # reduce to 200_000 if memory pressure
-OUTPUT_COMPRESSION: Optional[str] = "gzip"  # "gzip" or None
+OUTPUT_COMPRESSION: Optional[str] = None # "gzip" or None
 # -------------------------------------------
 
 
