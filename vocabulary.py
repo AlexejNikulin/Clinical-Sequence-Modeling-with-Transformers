@@ -127,13 +127,11 @@ class Vocabulary:
     _next_readm: int = 50000
     _next_death: int = 60000
  
-    def __init__(
-        self,
-        df: Optional[pd.DataFrame] = None,
-        vocab_path: Optional[Path] = None,
-        token_converter: Optional[TokenConverter] = None,
-    ):
-        self.token_converter = token_converter or TokenConverter()
+    def __init__(self, df = None):
+        self.VOCAB_PATH = Path("../out/vocab/vocabulary.json")
+        self.COMBINED_CSV = Path("../out/merge_and_sort/combined.csv")
+
+        self.token_converter = TokenConverter()
 
         self.special_vocab = {}
         self.admission_vocab = {}
@@ -144,29 +142,11 @@ class Vocabulary:
         self.death_vocab = {}
 
         self._init_special_tokens()
-
-        # ------------------------------------
-        # Auto load or build
-        # ------------------------------------
-        if vocab_path is not None and vocab_path.exists():
-            self._load_from_disk(vocab_path)
-
-        else:
-            if df is None:
-                raise ValueError(
-                    "Vocabulary needs a DataFrame when vocab_path does not exist."
-                )
-
-            self.build_from_dataframe(df)
-
-            if vocab_path is not None:
-                vocab_path.parent.mkdir(parents=True, exist_ok=True)
-                self.save(vocab_path)
     
     # ------------------------
     # Save vocabulary to disk
     # ------------------------
-    def save(self, path: str | Path):
+    def save(self, path):
         path = Path(path)
         data = {
             "special": self.special_vocab,
@@ -181,7 +161,7 @@ class Vocabulary:
             json.dump(data, f, indent=2)
 
     @classmethod
-    def load(cls, path: str | Path):
+    def load(cls, path):
         path = Path(path)
 
         with open(path, "r", encoding="utf-8") as f:
@@ -403,54 +383,26 @@ class Vocabulary:
         return self.MASK
  
  #-----------MAIN CODE--------------
-if __name__ == "__main__":
- 
-    VOCAB_PATH = Path("../out/vocab/vocabulary.json")
-    COMBINED_CSV = Path("../out/merge_and_sort/combined.csv")
- 
-    # ------------------------------------
-    # Load or build vocabulary
-    # ------------------------------------
-    if VOCAB_PATH.exists():
-        vocab = Vocabulary.load(VOCAB_PATH)
- 
-        print("Vocabulary loaded. Converting 10 random rows to tokens...\n")
- 
-        df = pd.read_csv(COMBINED_CSV)
- 
-        # 10 zufällige Zeilen
-        sample_df = df.sample(n=10, random_state=42)
+    def build_vocabulary(self):    
+        # ------------------------------------
+        # Load or build vocabulary
+        # ------------------------------------
+        if self.VOCAB_PATH is not None and self.VOCAB_PATH.exists():
+            self._load_from_disk(self.VOCAB_PATH)
+            print("Vocabulary loaded!")
 
-        print("\n=== SPECIAL VOCAB ===")
-        print(vocab.special_vocab)
-    
-        print("\n=== ADMISSION VOCAB ===")
-        print(vocab.admission_vocab)
-    
-        print("\n=== DIAGNOSIS VOCAB ===")
-        print(vocab.diagnosis_vocab)
-    
-        print("\n=== PROCEDURE VOCAB ===")
-        print(vocab.labevents_vocab)
-    
-        print("\n=== MEDICATION VOCAB ===")
-        print(vocab.medication_vocab)
-    
-        print("\n=== READMISSION VOCAB ===")
-        print(vocab.readmission_vocab)
-    
-        print("\n=== DEATH VOCAB ===")
-        print(vocab.death_vocab)
- 
-        for idx, row in sample_df.iterrows():
-            token = vocab.row_to_token(row)
- 
-            print(f"Row: {row}")
-            print(f"Event type: {row['event_type']}")
-            print(f"Token     : {token}")
-            print("-" * 40)
- 
-    else:
-        print("Vocabulary not found. Building new vocabulary...")
-        df = pd.read_csv(COMBINED_CSV)
-        vocab = Vocabulary(df, vocab_path=VOCAB_PATH)
+        else:
+            df = pd.read_csv(self.COMBINED_CSV)
+
+            if df is None:
+                raise ValueError(
+                    "Vocabulary needs a DataFrame when vocab_path does not exist."
+                )
+
+            self.build_from_dataframe(df)
+
+            if self.VOCAB_PATH is not None:
+                self.VOCAB_PATH.parent.mkdir(parents=True, exist_ok=True)
+                self.save(self.VOCAB_PATH)
+                
+            print("Vocabulary built!")
