@@ -33,7 +33,7 @@ class CompactTransformerConfig:
 
 class CompactTransformerEncoder(nn.Module):
     """
-    Compact Transformer *encoder* for MLM.
+    Compact Transformer *encoder* for MLM. 
     Input:
       - input_ids:        [B, L]
       - attention_mask:   [B, L] (1=token, 0=pad)
