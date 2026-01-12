@@ -36,7 +36,7 @@ def age_tok(x):
 
 def make_demo_df(subject_id):
     if subject_id not in patients_df.index:
-        return pd.DataFrame(columns=["subject_id","timestamp","event_type","event_value","source"])
+        return pd.DataFrame(columns=["subject_id","timestamp","event_type","event_value","result"])
     
     row = patients_df.loc[subject_id]
     toks = [gender_tok(row["gender"]), age_tok(row["anchor_age"]), yeargrp_tok(row["anchor_year_group"])]
@@ -46,7 +46,7 @@ def make_demo_df(subject_id):
         "timestamp":  ["1900-01-01 00:00:00"]*len(toks),  
         "event_type": ["DEM"]*len(toks),
         "event_value": toks,
-        "source":     ["patients"]*len(toks),
+        "result":     [""]*len(toks),
     })
 
 
@@ -81,12 +81,12 @@ def write_patient_events_for_file(file, subject_ids_with_file):
                 subject_ids_with_file.add(subject_id)
 
 # Create one file for each patient
-os.makedirs(PATIENT_CSV_PATH)
-write_patient_events_for_file(ADMISSION_CSV, subject_ids_with_file)
-write_patient_events_for_file(DIAGNOSES_CSV, subject_ids_with_file)
-write_patient_events_for_file(DISCHARGES_CSV, subject_ids_with_file)
-write_patient_events_for_file(MEDICATION_CSV, subject_ids_with_file)
-write_patient_events_for_file(LABEVENTS_CSV, subject_ids_with_file)
+# os.makedirs(PATIENT_CSV_PATH)
+# write_patient_events_for_file(ADMISSION_CSV, subject_ids_with_file)
+# write_patient_events_for_file(DIAGNOSES_CSV, subject_ids_with_file)
+# write_patient_events_for_file(DISCHARGES_CSV, subject_ids_with_file)
+# write_patient_events_for_file(MEDICATION_CSV, subject_ids_with_file)
+# write_patient_events_for_file(LABEVENTS_CSV, subject_ids_with_file)
 
 # For each patient, sort the events, and append them to the global dataframe
 patient_files = os.listdir(PATIENT_CSV_PATH)
@@ -102,13 +102,16 @@ for patient_file in tqdm(patient_files, desc="Merging patients"):
 
     if patient_row["dod"] is not None and patient_row["dod"] != "NaN":
         death_timestamp = f"{patient_row['dod']} 00:00:00"
-        death_row = pd.DataFrame({"subject_id": patient_id, "timestamp": death_timestamp, "event_type": 5, "event_value": "", "source": "patients"}, index=[0])
+        death_row = pd.DataFrame({"subject_id": patient_id, "timestamp": death_timestamp, "event_type": 5, "event_value": "", "result": ""}, index=[0])
         patient_df = pd.concat([patient_df, death_row], ignore_index=True)
 
     patient_df["timestamp"] = pd.to_datetime(patient_df["timestamp"], errors="coerce")
     patient_df = patient_df.dropna(subset=["timestamp"])
     patient_df = patient_df.sort_values(["timestamp"])
 
+    has_admission = patient_df['event_type'].isin([0, 1]).any()
+    if not has_admission:
+        continue
     
     write_mode = 'w' if idx == 0 else 'a' # write / append
     write_header = (idx == 0)
@@ -123,6 +126,3 @@ for patient_file in tqdm(patient_files, desc="Merging patients"):
     # os.remove(PATIENT_CSV_PATH + patient_file)
 
     idx += 1
-
-# What's still missing
-# - procedure

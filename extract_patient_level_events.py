@@ -17,6 +17,7 @@ DIAGNOSES_CSV  = DATA_DIR / "diagnoses_icd.csv"
 LABEVENTS_CSV  = DATA_DIR / "labevents.csv"
 DLABITEMS_CSV  = DATA_DIR / "d_labitems.csv"
 EMAR_CSV       = DATA_DIR / "emar.csv"
+EMAR_DETAIL_CSV       = DATA_DIR / "emar_detail.csv"
 
 # Output files
 OUT_DYNAMIC = OUT_DIR / "events_dynamic_"
@@ -42,17 +43,7 @@ def to_dt(series: pd.Series) -> pd.Series:
 
 def save_events_dynamic(input_df, file_suffix):
 
-    events_dynamic = pd.concat(
-        [
-            input_df
-            # adm_events[["subject_id", "timestamp", "event_type", "event_value", "source"]],
-            # dis_events[["subject_id", "timestamp", "event_type", "event_value", "source"]],
-            # diag_events,
-            # lab_events,
-            # med_events
-        ],
-        ignore_index=True
-    )
+    events_dynamic = pd.concat([input_df], ignore_index=True)
 
     events_dynamic["timestamp"] = to_dt(events_dynamic["timestamp"])
     events_dynamic = events_dynamic.dropna(subset=["timestamp"])
@@ -70,19 +61,17 @@ def save_events_dynamic(input_df, file_suffix):
 
 # ------------------------
 
-admissions = pd.read_csv(ADMISSIONS_CSV, usecols=["subject_id", "hadm_id", "admittime", "dischtime"])
+admissions = pd.read_csv(ADMISSIONS_CSV, usecols=["subject_id", "hadm_id", "admittime", "dischtime", "admission_type"])
 admissions["admittime"] = to_dt(admissions["admittime"])
 admissions["dischtime"] = to_dt(admissions["dischtime"])
 
-adm_events = admissions[["subject_id", "admittime"]].rename(columns={"admittime": "timestamp"})
+adm_events = admissions[["subject_id", "admittime", "admission_type"]].rename(columns={"admittime": "timestamp", "admission_type": "result"})
 adm_events["event_type"]  = 0
 adm_events["event_value"] = ""
-adm_events["source"]      = "admissions"
 
-dis_events = admissions[["subject_id", "dischtime"]].rename(columns={"dischtime": "timestamp"})
+dis_events = admissions[["subject_id", "dischtime", "admission_type"]].rename(columns={"dischtime": "timestamp", "admission_type": "result"})
 dis_events["event_type"]  = 1
 dis_events["event_value"] = ""
-dis_events["source"]      = "admissions"
 
 hadm_to_dischtime = admissions.set_index("hadm_id")["dischtime"]  # for diagnoses timestamps
 
@@ -90,12 +79,12 @@ print("ADM rows:", len(adm_events), "DIS rows:", len(dis_events))
 adm_events.head()
 
 save_events_dynamic(
-    adm_events[["subject_id", "timestamp", "event_type", "event_value", "source"]],
+    adm_events[["subject_id", "timestamp", "event_type", "event_value", "result"]],
     "admissions"
 )
 
 save_events_dynamic(
-    dis_events[["subject_id", "timestamp", "event_type", "event_value", "source"]],
+    dis_events[["subject_id", "timestamp", "event_type", "event_value", "result"]],
     "discharges"
 )
 
@@ -111,16 +100,16 @@ diag_icd10["timestamp"] = diag_icd10["hadm_id"].map(hadm_to_dischtime)
 diag_icd10 = diag_icd10.dropna(subset=["timestamp"])
 diag_icd10["event_type"]  = 2
 diag_icd10["event_value"] = diag_icd10["icd_code"].map(lambda c: f"10_{sanitize_token(c)}")
-diag_icd10["source"]      = "diagnoses_icd"
-diag10_events = diag_icd10[["subject_id", "timestamp", "event_type", "event_value", "source"]]
+diag_icd10["result"]      = ""
+diag10_events = diag_icd10[["subject_id", "timestamp", "event_type", "event_value", "result"]]
 
 # proxy timestamp from admissions dischtime
 diag_icd9["timestamp"] = diag_icd9["hadm_id"].map(hadm_to_dischtime)
 diag_icd9 = diag_icd9.dropna(subset=["timestamp"])
 diag_icd9["event_type"]  = 2
 diag_icd9["event_value"] = diag_icd9["icd_code"].map(lambda c: f"9_{sanitize_token(c)}")
-diag_icd9["source"]      = "diagnoses_icd"
-diag9_events = diag_icd9[["subject_id", "timestamp", "event_type", "event_value", "source"]]
+diag_icd9["result"]      = ""
+diag9_events = diag_icd9[["subject_id", "timestamp", "event_type", "event_value", "result"]]
 
 diag_events = pd.concat([diag10_events, diag9_events], ignore_index=True)
 
@@ -145,7 +134,7 @@ print(f"Processing to: {output_file}")
 # Process in chunks, as this file is 18GB large
 with pd.read_csv(
     LABEVENTS_CSV,
-    usecols=["subject_id", "charttime", "itemid", "valuenum", "value", "valueuom"],
+    usecols=["subject_id", "charttime", "itemid", "valuenum", "value", "valueuom", "flag"],
     chunksize=1_000_000
 ) as reader:
     
@@ -154,7 +143,7 @@ with pd.read_csv(
         chunk = chunk.dropna(subset=["charttime"])
 
         chunk["event_type"] = 3
-        chunk["source"] = "labevents"
+        chunk["result"] = chunk["flag"]
 
         chunk["event_value"] = chunk["itemid"].map(item_map)
         
@@ -173,7 +162,7 @@ with pd.read_csv(
         lab_events = chunk[[
             "subject_id", "timestamp", "event_type", "event_value",
             # "value_num", "value_text", "unit", # unused right now, would have to be merged into event_value to not break the scripts
-            "source"
+            "result"
         ]]
 
         write_mode = 'w' if i == 0 else 'a' # write / append
@@ -192,16 +181,33 @@ print("Processing complete.")
 
 # ------------------------
 
+meds_detail = pd.read_csv(EMAR_DETAIL_CSV, usecols=["emar_id", "pharmacy_id", "dose_given", "dose_given_unit"])
+meds_detail = (
+    meds_detail[meds_detail["pharmacy_id"].notna() & (meds_detail["pharmacy_id"] != "")]
+    .drop_duplicates("emar_id")
+    .set_index("emar_id")
+)
+meds_detail["result"] = (
+    meds_detail["dose_given"].astype(str) + 
+    "_" + 
+    meds_detail["dose_given_unit"].astype(str)
+)
+lookup_dict = meds_detail["result"].to_dict()
+del meds_detail
+
 # NOTE: assumes column name is 'medication' in your emar.csv
-meds = pd.read_csv(EMAR_CSV, usecols=["subject_id", "charttime", "medication"])
+meds = pd.read_csv(EMAR_CSV, usecols=["subject_id", "emar_id", "charttime", "medication"])
 meds["charttime"] = to_dt(meds["charttime"])
 meds = meds.dropna(subset=["charttime"])
 
 meds["event_type"]  = 4
 meds["event_value"] = meds["medication"].map(lambda m: f"{sanitize_token(m)}")
-meds["source"]      = "emar"
+meds["result"]      = ""
 
-med_events = meds.rename(columns={"charttime": "timestamp"})[["subject_id", "timestamp", "event_type", "event_value", "source"]]
+for index, row in meds.iterrows():
+    meds.at[index, "result"] = lookup_dict.get(row["emar_id"], "")
+
+med_events = meds.rename(columns={"charttime": "timestamp"})[["subject_id", "timestamp", "event_type", "event_value", "result"]]
 print("MED rows:", len(med_events))
 med_events.head()
 
