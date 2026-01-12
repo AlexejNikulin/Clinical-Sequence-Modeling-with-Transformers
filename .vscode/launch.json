@@ -1,0 +1,14 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Train MLM (module)",
+      "type": "python",
+      "request": "launch",
+      "module": "transformer.train_mlm",
+      "args": ["--use_synth", "--use_event_types"],
+      "console": "integratedTerminal"
+    }
+  ]
+}
+
