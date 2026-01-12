@@ -8,6 +8,7 @@ Adapted to project Vocabulary API:
 """
 
 from typing import List, Tuple, Any
+from pathlib import Path
 
 
 def tokenize_and_pad_from_tokens(
@@ -106,24 +107,25 @@ if __name__ == "__main__":
     from vocabulary import Vocabulary
 
     # Build a toy dataframe for vocabulary construction
-    df = pd.DataFrame(
-        [
-            {"event_type": 0},
-            {"event_type": 1, "icd_code": "I10", "icd_version": 10},
-            {"event_type": 1, "icd_code": "E11", "icd_version": 10},
-            {"event_type": 2, "icd_code": "5491", "icd_version": 9},
-            {"event_type": 3, "formulary_drug_cd": "LISINOPRIL"},
-            {"event_type": 4},
-            {"event_type": 5},
-        ]
-    )
+    # df = pd.DataFrame(
+    #     [
+    #         {"event_type": 0},
+    #         {"event_type": 1, "event_value": "I10"},
+    #         {"event_type": 1, "event_value": "E11"},
+    #         {"event_type": 2, "event_value": "5491"},
+    #         {"event_type": 3, "event_value": "LISINOPRIL"},
+    #         {"event_type": 4},
+    #         {"event_type": 5},
+    #     ]
+    # )
 
-    vocab = Vocabulary(df)
+    VOCAB_PATH = Path("../out/vocab/vocabulary.json")
+    vocab = Vocabulary.load(VOCAB_PATH)
 
     # ---- Test A: token-based sequences ----
     token_sequences = [
-        ["[ADM]", "[DIAG_I10]", "[MED_LISINOPRIL]", "[DEATH]"],
-        ["[ADM]", "[DIAG_E11]", "[READM]"],
+        ["[ADM]", "[DIAG_9_496]", "[MED_RALTEGRAVIR]", "[DEATH]"],
+        ["[ADM]", "[DIAG_9_07071]", "[READM]"],
         ["[ADM]", "[MED_NEW_DRUG]"],  # should map to UNK
     ]
 
@@ -137,16 +139,16 @@ if __name__ == "__main__":
         print(row)
 
     # ---- Test B: row-based sequences ----
-    row_sequences = [
-        [df.iloc[0], df.iloc[1], df.iloc[4], df.iloc[6]],
-        [df.iloc[0], df.iloc[2], df.iloc[5]],
-    ]
+    # row_sequences = [
+    #     [df.iloc[0], df.iloc[1], df.iloc[4], df.iloc[6]],
+    #     [df.iloc[0], df.iloc[2], df.iloc[5]],
+    # ]
 
-    ids2, masks2 = tokenize_and_pad_from_rows(row_sequences, vocab, max_len=6)
-    print("\nRow-based sequences -> input_ids:")
-    for row in ids2:
-        print(row)
+    # ids2, masks2 = tokenize_and_pad_from_rows(row_sequences, vocab, max_len=6)
+    # print("\nRow-based sequences -> input_ids:")
+    # for row in ids2:
+    #     print(row)
 
-    print("\nRow-based sequences -> attention_masks:")
-    for row in masks2:
-        print(row)
+    # print("\nRow-based sequences -> attention_masks:")
+    # for row in masks2:
+    #     print(row)

@@ -23,7 +23,16 @@ class TokenConverter:
           - icd_code, icd_version (for diag/proc)
           - formulary_drug_cd (for med)
         """
-        event = int(row["event_type"])
+        raw_event = row["event_type"]
+
+        if pd.isna(raw_event):
+            return self.get_unknown_token()
+
+        try:
+            event = int(raw_event)
+        except (ValueError, TypeError):
+            # e.g. "DEM", "LAB", "", None → skip
+            return self.get_unknown_token()
  
         if event == EventType.ADMISSION:
             return self.adm_to_token()
@@ -69,6 +78,15 @@ class TokenConverter:
  
     def med_to_token(self, drug_cd: str) -> str:
         return f"[MED_{drug_cd}]"
+    
+    def get_unknown_token(self) -> str:
+        return ["UNK"]
+   
+    def get_padding_token(self) -> str:
+        return ["PAD"]
+   
+    def get_masking_token(self) -> str:
+        return ["MASK"]
  
 @dataclass
 class Vocabulary:
@@ -109,9 +127,14 @@ class Vocabulary:
     _next_readm: int = 50000
     _next_death: int = 60000
  
-    def __init__(self, df: pd.DataFrame, token_converter: Optional[TokenConverter] = None):
+    def __init__(
+        self,
+        df: Optional[pd.DataFrame] = None,
+        vocab_path: Optional[Path] = None,
+        token_converter: Optional[TokenConverter] = None,
+    ):
         self.token_converter = token_converter or TokenConverter()
- 
+
         self.special_vocab = {}
         self.admission_vocab = {}
         self.diagnosis_vocab = {}
@@ -119,10 +142,27 @@ class Vocabulary:
         self.medication_vocab = {}
         self.readmission_vocab = {}
         self.death_vocab = {}
- 
+
         self._init_special_tokens()
-        self.build_from_dataframe(df)
- 
+
+        # ------------------------------------
+        # Auto load or build
+        # ------------------------------------
+        if vocab_path is not None and vocab_path.exists():
+            self._load_from_disk(vocab_path)
+
+        else:
+            if df is None:
+                raise ValueError(
+                    "Vocabulary needs a DataFrame when vocab_path does not exist."
+                )
+
+            self.build_from_dataframe(df)
+
+            if vocab_path is not None:
+                vocab_path.parent.mkdir(parents=True, exist_ok=True)
+                self.save(vocab_path)
+    
     # ------------------------
     # Save vocabulary to disk
     # ------------------------
@@ -139,19 +179,35 @@ class Vocabulary:
         }
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
- 
-    # ------------------------
-    # Load vocabulary from disk
-    # ------------------------
+
     @classmethod
     def load(cls, path: str | Path):
         path = Path(path)
+
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
- 
-        vocab = cls.__new__(cls)  # um __init__(df) zu umgehen
+
+        vocab = cls.__new__(cls)
+
         vocab.token_converter = TokenConverter()
- 
+
+        vocab.special_vocab = {}
+        vocab.admission_vocab = {}
+        vocab.diagnosis_vocab = {}
+        vocab.labevents_vocab = {}
+        vocab.medication_vocab = {}
+        vocab.readmission_vocab = {}
+        vocab.death_vocab = {}
+
+        vocab._next_special = 0
+        vocab._next_adm = 10000
+        vocab._next_diag = 20000
+        vocab._next_labev = 30000
+        vocab._next_med = 40000
+        vocab._next_readm = 50000
+        vocab._next_death = 60000
+
+        # --------- jetzt sicher ---------
         vocab.special_vocab = data["special"]
         vocab.admission_vocab = data["admission"]
         vocab.diagnosis_vocab = data["diagnosis"]
@@ -159,9 +215,24 @@ class Vocabulary:
         vocab.medication_vocab = data["medication"]
         vocab.readmission_vocab = data["readmission"]
         vocab.death_vocab = data["death"]
- 
+
         return vocab
  
+    # ------------------------
+    # Load vocabulary from disk
+    # ------------------------
+    def _load_from_disk(self, path: Path) -> None:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        self.special_vocab = data["special"]
+        self.admission_vocab = data["admission"]
+        self.diagnosis_vocab = data["diagnosis"]
+        self.labevents_vocab = data["labevents"]
+        self.medication_vocab = data["medication"]
+        self.readmission_vocab = data["readmission"]
+        self.death_vocab = data["death"]
+    
     # -------------------------
     # Special tokens init (global)
     # -------------------------
@@ -178,17 +249,30 @@ class Vocabulary:
     def build_from_dataframe(self, df: pd.DataFrame) -> None:
         if "event_type" not in df.columns:
             raise ValueError("DataFrame missing required column: 'event_type'")
- 
+
         for _, row in df.iterrows():
-            event = int(row["event_type"])
+
+            # --- robust event_type parsing ---
+            raw_event = row["event_type"]
+
+            if pd.isna(raw_event):
+                continue
+
+            try:
+                event = int(raw_event)
+            except (ValueError, TypeError):
+                # e.g. "DEM", "LAB", "", None → skip
+                continue
+
+            # ---------------------------------
             token = self.token_converter.convert_row_to_token_seq(row)
             if token is None:
                 continue
- 
+
             vocab = self._vocab_for_event(event)
             if vocab is None:
                 continue
- 
+
             self._add_token(vocab, token, event)
  
     # -------------------------
@@ -266,6 +350,17 @@ class Vocabulary:
         token = self.token_converter.convert_row_to_token_seq(row)
         if token is None:
             return self.UNK
+        
+        raw_event = row["event_type"]
+
+        if pd.isna(raw_event):
+            return self.UNK
+
+        try:
+            event = int(raw_event)
+        except (ValueError, TypeError):
+            # e.g. "DEM", "LAB", "", None → skip
+            return self.UNK
  
         vocab = self._vocab_for_event(int(row["event_type"]))
         if vocab is None:
@@ -325,15 +420,32 @@ if __name__ == "__main__":
  
         # 10 zufällige Zeilen
         sample_df = df.sample(n=10, random_state=42)
+
+        print("\n=== SPECIAL VOCAB ===")
+        print(vocab.special_vocab)
+    
+        print("\n=== ADMISSION VOCAB ===")
+        print(vocab.admission_vocab)
+    
+        print("\n=== DIAGNOSIS VOCAB ===")
+        print(vocab.diagnosis_vocab)
+    
+        print("\n=== PROCEDURE VOCAB ===")
+        print(vocab.labevents_vocab)
+    
+        print("\n=== MEDICATION VOCAB ===")
+        print(vocab.medication_vocab)
+    
+        print("\n=== READMISSION VOCAB ===")
+        print(vocab.readmission_vocab)
+    
+        print("\n=== DEATH VOCAB ===")
+        print(vocab.death_vocab)
  
         for idx, row in sample_df.iterrows():
-            # Variante A: über Vocabulary (empfohlen, falls vorhanden)
             token = vocab.row_to_token(row)
  
-            # Variante B: direkt über TokenConverter
-            # token = vocab.token_converter.convert_to_token(row)
- 
-            print(f"Row index: {idx}")
+            print(f"Row: {row}")
             print(f"Event type: {row['event_type']}")
             print(f"Token     : {token}")
             print("-" * 40)
@@ -341,70 +453,4 @@ if __name__ == "__main__":
     else:
         print("Vocabulary not found. Building new vocabulary...")
         df = pd.read_csv(COMBINED_CSV)
-        vocab = Vocabulary(df)
-        VOCAB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        vocab.save(VOCAB_PATH)
- 
-    # # -------------------------
-    # # Example data (toy)
-    # # -------------------------
-    # df = pd.DataFrame(
-    #     [
-    #         {"event_type": 0},
-    #         {"event_type": 1, "icd_code": "I10", "icd_version": 10},
-    #         {"event_type": 1, "icd_code": "E11", "icd_version": 10},
-    #         {"event_type": 2, "icd_code": "5491", "icd_version": 9},
-    #         {"event_type": 3, "medication": "LISINOPRIL"},
-    #         {"event_type": 4},
-    #         {"event_type": 5},
-    #     ]
-    # )
- 
-    # vocab = Vocabulary(df)
- 
-    # # -------------------------
-    # # 1) Print vocabularies
-    # # -------------------------
-    # print("\n=== SPECIAL VOCAB ===")
-    # print(vocab.special_vocab)
- 
-    # print("\n=== ADMISSION VOCAB ===")
-    # print(vocab.admission_vocab)
- 
-    # print("\n=== DIAGNOSIS VOCAB ===")
-    # print(vocab.diagnosis_vocab)
- 
-    # print("\n=== PROCEDURE VOCAB ===")
-    # print(vocab.procedure_vocab)
- 
-    # print("\n=== MEDICATION VOCAB ===")
-    # print(vocab.medication_vocab)
- 
-    # print("\n=== READMISSION VOCAB ===")
-    # print(vocab.readmission_vocab)
- 
-    # print("\n=== DEATH VOCAB ===")
-    # print(vocab.death_vocab)
- 
-    # # -------------------------
-    # # 2) From another row -> ID (token -> id)
-    # # -------------------------
-    # row_for_id = df.iloc[4]  # MED LISINOPRIL
-    # token = vocab.row_to_token(row_for_id)
-    # token_id = vocab.token_to_id(token)
-    # print("\nRow -> Token -> ID")
-    # print("Row:", row_for_id.to_dict())
-    # print("Token:", token)
-    # print("ID:", token_id)
- 
-    # # -------------------------
-    # # 3) Unseen example -> UNK token and UNK id
-    # # -------------------------
-    # unseen = pd.Series({"event_type": 3, "medication": "NEW_DRUG"})
-    # unseen_token = vocab.row_to_token(unseen)
-    # unseen_id = vocab.token_to_id(unseen_token)
-    # print("\nUnseen row -> Token -> ID")
-    # print("Row:", dict(unseen))
-    # print("Token:", unseen_token)
-    # print("ID:", unseen_id)
- 
+        vocab = Vocabulary(df, vocab_path=VOCAB_PATH)
