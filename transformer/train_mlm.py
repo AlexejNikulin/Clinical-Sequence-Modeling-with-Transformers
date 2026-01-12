@@ -28,7 +28,7 @@ from typing import Dict, Optional, List, Any
 import torch
 from torch.utils.data import Dataset, DataLoader
 
-# ✅ LOCAL imports (work with: cd transformer && python train_mlm.py)
+# LOCAL imports (work with: cd transformer && python train_mlm.py)
 from compact_transformer_encoder import (
     CompactTransformerConfig,
     CompactTransformerEncoder,
@@ -273,7 +273,7 @@ def train_mlm(
         loss = out["loss"]
         loss.backward()
 
-        # ✅ Measure grad norm after backward and before optimizer step
+        # Measure grad norm after backward and before optimizer step
         grad_norm = global_grad_norm(model)
 
         optimizer.step()
