@@ -2,6 +2,8 @@ from extract_patient_level_events import PatientLevelEventExtractor
 from sort_and_merge import SortMerger
 from split_combined import DataSplitter
 from vocabulary import Vocabulary
+from build_patient_event_sequences import EventSequencer
+from tokenize_sequences import TokenSequencer
 
 # 1 - Extract_patient_level_events - WORKS
 # patientLevelEventExtractor = PatientLevelEventExtractor()
@@ -19,6 +21,10 @@ from vocabulary import Vocabulary
 # vocabulary = Vocabulary()
 # vocabulary.build_vocabulary()
 
-# 5 - Build_patient_event_sequences
+# 5 - Build_patient_event_sequences - WORKS
+# eventSequencer = EventSequencer()
+# eventSequencer.build_sequences()
 
-# 6 - tokenize_sequences
+# 6 - tokenize_sequences - WORKS
+# tokenSequencer = TokenSequencer()
+# tokenSequencer.build_sequences()
