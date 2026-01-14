@@ -13,9 +13,9 @@ if __name__ == "__main__":
     cfg = CompactTransformerConfig(
         vocab_size=70000,
         max_len=256,
-        d_model=192,    # 128 or 256
+        d_model=192,    # 128 or 192 or 256
         n_layers=3,
-        n_heads=6,      # 4 or 6
+        n_heads=6,      # 4 or 6 or 8
         use_event_type_embeddings=True,
         n_event_types=6,
         pad_token_id=0,
