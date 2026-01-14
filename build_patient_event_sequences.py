@@ -12,7 +12,7 @@ from IPython.display import Image
 
 from pathlib import Path
 
-class EventSequencer():
+class EventSequencer:
     def __init__(self):
         self.SOURCE_TO_STAGE = {
             "admissions": "Admission",

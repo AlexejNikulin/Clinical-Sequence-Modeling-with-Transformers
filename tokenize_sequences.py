@@ -1,7 +1,7 @@
 from typing import List, Tuple, Any
 from pathlib import Path
 
-class TokenSequencer():
+class TokenSequencer:
     """
     Tokenize sequences and pad/clip for transformer input.
 
