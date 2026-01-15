@@ -58,6 +58,7 @@ from __future__ import annotations
 import os
 import csv
 import math
+from pathlib import Path
 import time
 import random
 from dataclasses import asdict
@@ -67,12 +68,9 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 
 # Local imports
-from compact_transformer_encoder import (
-    CompactTransformerConfig,
-    CompactTransformerEncoder,
-)
+from vocabulary import Vocabulary
 from mlm_masking import mlm_mask_801010
-
+from compact_transformer_encoder import CompactTransformerConfig, CompactTransformerEncoder
 
 # =================================================
 # Reproducibility
@@ -143,7 +141,7 @@ def build_joint_sequences(
         seq = seq[:max_len]
         seg = seg[:max_len]
 
-        attn = [1] * len(seq)
+        attn = [0 if tok == pad_id else 1 for tok in seq]
 
         # Pad
         while len(seq) < max_len:
@@ -232,231 +230,232 @@ def make_dataloader(
     ds = SequenceDataset(input_ids, attention_mask, segment_ids)
     return DataLoader(ds, batch_size=batch_size, shuffle=True, drop_last=True)
 
+class Transformer:
+    # =================================================
+    # MLM batch preparation
+    # =================================================
+    def make_mlm_batch(
+        self,
+        batch: Dict[str, torch.Tensor],
+        *,
+        vocab,
+        vocab_size: int,
+        p_mlm: float,
+        device: torch.device,
+        mask_demo: bool = False,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Apply MLM masking.
+        Default: mask ONLY event tokens (segment==1).
+        """
+        input_ids = batch["input_ids"].to(device)
+        attention_mask = batch["attention_mask"].to(device)
 
-# =================================================
-# MLM batch preparation
-# =================================================
-def make_mlm_batch(
-    batch: Dict[str, torch.Tensor],
-    *,
-    vocab,
-    vocab_size: int,
-    p_mlm: float,
-    device: torch.device,
-    mask_demo: bool = False,
-) -> Dict[str, torch.Tensor]:
-    """
-    Apply MLM masking.
-    Default: mask ONLY event tokens (segment==1).
-    """
-    input_ids = batch["input_ids"].to(device)
-    attention_mask = batch["attention_mask"].to(device)
+        pad_id = vocab.token_to_id(vocab.get_padding_token())
+        mask_id = vocab.token_to_id(vocab.get_masking_token())
+        unk_id = vocab.token_to_id(vocab.get_unknown_token())
 
-    pad_id = vocab.token_to_id(vocab.get_padding_token())
-    mask_id = vocab.token_to_id(vocab.get_masking_token())
-    unk_id = vocab.token_to_id(vocab.get_unknown_token())
+        effective_mask = attention_mask
+        seg = batch.get("event_type_ids")
 
-    effective_mask = attention_mask
-    seg = batch.get("event_type_ids")
+        if seg is not None and not mask_demo:
+            seg = seg.to(device)
+            effective_mask = attention_mask.clone()
+            effective_mask[seg == 0] = 0  # never mask demographics
 
-    if seg is not None and not mask_demo:
-        seg = seg.to(device)
-        effective_mask = attention_mask.clone()
-        effective_mask[seg == 0] = 0  # never mask demographics
-
-    masked_input_ids, labels = mlm_mask_801010(
-        input_ids=input_ids,
-        attention_mask=effective_mask,
-        mask_token_id=mask_id,
-        vocab_size=vocab_size,
-        p_mlm=p_mlm,
-        pad_token_id=pad_id,
-        never_mask_token_ids=[pad_id, mask_id, unk_id],
-    )
-
-    out = {
-        "input_ids": masked_input_ids,
-        "attention_mask": attention_mask,
-        "labels": labels,
-    }
-    if seg is not None:
-        out["event_type_ids"] = seg
-
-    return out
-
-
-# =================================================
-# Training utilities
-# =================================================
-def global_grad_norm(model: torch.nn.Module) -> float:
-    total = 0.0
-    for p in model.parameters():
-        if p.grad is not None:
-            total += (p.grad.data.norm(2).item() ** 2)
-    return math.sqrt(total)
-
-
-def ensure_dir(path: str) -> None:
-    os.makedirs(path, exist_ok=True)
-
-
-def make_run_log_path(base_dir: str = "logs", prefix: str = "train_log") -> str:
-    ensure_dir(base_dir)
-    stamp = time.strftime("%Y%m%d_%H%M%S")
-    return os.path.join(base_dir, f"{prefix}_{stamp}.csv")
-
-
-# =================================================
-# Training loop
-# =================================================
-def train_mlm(
-    *,
-    vocab,
-    input_ids,
-    attention_mask,
-    segment_ids,
-    cfg: CompactTransformerConfig,
-    steps: int,
-    batch_size: int,
-    lr: float,
-    p_mlm: float,
-    seed: int = 0,
-    mask_demo: bool = False,
-) -> None:
-    set_seed(seed)
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    loader = make_dataloader(
-        input_ids,
-        attention_mask,
-        segment_ids if cfg.use_event_type_embeddings else None,
-        batch_size,
-    )
-
-    model = CompactTransformerEncoder(cfg).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
-    model.train()
-
-    log_path = make_run_log_path()
-    fieldnames = ["step", "loss", "grad_norm", "logits_max", "n_masked", "masked_ratio"]
-
-    with open(log_path, "w", newline="") as f:
-        csv.DictWriter(f, fieldnames=fieldnames).writeheader()
-
-    print("=== Training config ===")
-    print(asdict(cfg))
-    print(f"device={device}")
-    print(f"log_path={log_path}")
-    print("=======================\n")
-
-    step = 0
-    data_iter = iter(loader)
-
-    while step < steps:
-        try:
-            batch = next(data_iter)
-        except StopIteration:
-            data_iter = iter(loader)
-            batch = next(data_iter)
-
-        mlm_batch = make_mlm_batch(
-            batch,
-            vocab=vocab,
-            vocab_size=cfg.vocab_size,
+        masked_input_ids, labels = mlm_mask_801010(
+            input_ids=input_ids,
+            attention_mask=effective_mask,
+            mask_token_id=mask_id,
+            vocab_size=vocab_size,
             p_mlm=p_mlm,
-            device=device,
-            mask_demo=mask_demo,
+            pad_token_id=pad_id,
+            never_mask_token_ids=[pad_id, mask_id, unk_id],
         )
 
-        optimizer.zero_grad(set_to_none=True)
-        out = model(**mlm_batch)
-        loss = out["loss"]
-        loss.backward()
+        out = {
+            "input_ids": masked_input_ids,
+            "attention_mask": attention_mask,
+            "labels": labels,
+        }
+        if seg is not None:
+            out["event_type_ids"] = seg
 
-        grad_norm = global_grad_norm(model)
-        optimizer.step()
+        return out
 
-        logits_max = out["logits"].abs().max().item()
 
-        labels = mlm_batch["labels"]
-        n_masked = (labels != -100).sum().item()
-        n_valid = (mlm_batch["attention_mask"] == 1).sum().item()
-        masked_ratio = n_masked / max(1, n_valid)
+    # =================================================
+    # Training utilities
+    # =================================================
+    def global_grad_norm(self, model: torch.nn.Module) -> float:
+        total = 0.0
+        for p in model.parameters():
+            if p.grad is not None:
+                total += (p.grad.data.norm(2).item() ** 2)
+        return math.sqrt(total)
 
-        if step % 10 == 0:
-            print(
-                f"[step {step:4d}] "
-                f"loss={loss.item():.4f} "
-                f"grad_norm={grad_norm:.3f} "
-                f"logits_max={logits_max:.3f} "
-                f"n_masked={n_masked} "
-                f"masked_ratio={masked_ratio:.3f}"
+
+    def ensure_dir(self, path: str) -> None:
+        os.makedirs(path, exist_ok=True)
+
+
+    def make_run_log_path(self, base_dir: str = "logs", prefix: str = "train_log") -> str:
+        self.ensure_dir(base_dir)
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        return os.path.join(base_dir, f"{prefix}_{stamp}.csv")
+
+
+    # =================================================
+    # Training loop
+    # =================================================
+    def train_mlm(
+        self,
+        *,
+        vocab,
+        input_ids,
+        attention_mask,
+        segment_ids,
+        cfg: CompactTransformerConfig,
+        steps: int,
+        batch_size: int,
+        lr: float,
+        p_mlm: float,
+        seed: int = 0,
+        mask_demo: bool = False,
+    ) -> None:
+        set_seed(seed)
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        loader = make_dataloader(
+            input_ids,
+            attention_mask,
+            segment_ids if cfg.use_event_type_embeddings else None,
+            batch_size,
+        )
+
+        model = CompactTransformerEncoder(cfg).to(device)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
+        model.train()
+
+        log_path = self.make_run_log_path()
+        fieldnames = ["step", "loss", "grad_norm", "logits_max", "n_masked", "masked_ratio"]
+
+        with open(log_path, "w", newline="") as f:
+            csv.DictWriter(f, fieldnames=fieldnames).writeheader()
+
+        print("=== Training config ===")
+        print(asdict(cfg))
+        print(f"device={device}")
+        print(f"log_path={log_path}")
+        print("=======================\n")
+
+        step = 0
+        data_iter = iter(loader)
+
+        while step < steps:
+            try:
+                batch = next(data_iter)
+            except StopIteration:
+                data_iter = iter(loader)
+                batch = next(data_iter)
+
+            mlm_batch = self.make_mlm_batch(
+                batch,
+                vocab=vocab,
+                vocab_size=cfg.vocab_size,
+                p_mlm=p_mlm,
+                device=device,
+                mask_demo=mask_demo,
             )
 
-        step += 1
+            optimizer.zero_grad(set_to_none=True)
+            out = model(**mlm_batch)
+            loss = out["loss"]
+            loss.backward()
 
-    print("\nTraining finished.")
-    print(f"Logs written to {log_path}")
+            grad_norm = self.global_grad_norm(model)
+            optimizer.step()
 
+            logits_max = out["logits"].abs().max().item()
 
-# =================================================
-# Dummy data + main
-# =================================================
-def make_synth_joint_nested(n_seq: int, vocab_size: int) -> List[List[List[int]]]:
-    rng = random.Random(0)
-    joint = []
-    for _ in range(n_seq):
-        demo = [rng.randint(3, 200) for _ in range(3)]
-        ev = [rng.randint(3, vocab_size - 1) for _ in range(rng.randint(10, 60))]
-        joint.append([demo, ev])
-    return joint
+            labels = mlm_batch["labels"]
+            n_masked = (labels != -100).sum().item()
+            n_valid = (mlm_batch["attention_mask"] == 1).sum().item()
+            masked_ratio = n_masked / max(1, n_valid)
 
+            if step % 10 == 0:
+                print(
+                    f"[step {step:4d}] "
+                    f"loss={loss.item():.4f} "
+                    f"grad_norm={grad_norm:.3f} "
+                    f"logits_max={logits_max:.3f} "
+                    f"n_masked={n_masked} "
+                    f"masked_ratio={masked_ratio:.3f}"
+                )
 
-def main() -> None:
-    vocab_size = 70000
+            step += 1
 
-    class MiniVocab:
-        def get_padding_token(self): return "[PAD]"
-        def get_masking_token(self): return "[MASK]"
-        def get_unknown_token(self): return "[UNK]"
-        def token_to_id(self, tok: str) -> int:
-            return {"[PAD]": 0, "[MASK]": 1, "[UNK]": 2}[tok]
-
-    vocab = MiniVocab()
-
-    cfg = CompactTransformerConfig(
-        vocab_size=vocab_size,
-        max_len=128,
-        d_model=192,
-        n_layers=3,
-        n_heads=6,
-        use_event_type_embeddings=True,
-        n_event_types=2,
-        pad_token_id=0,
-        mask_token_id=1,
-    )
-
-    joint = make_synth_joint_nested(800, vocab_size)
-
-    input_ids, attn, seg = build_from_joint_format(
-        joint_data=joint,
-        max_len=cfg.max_len,
-        pad_id=cfg.pad_token_id,
-    )
-
-    train_mlm(
-        vocab=vocab,
-        input_ids=input_ids,
-        attention_mask=attn,
-        segment_ids=seg,
-        cfg=cfg,
-        steps=300,
-        batch_size=16,
-        lr=3e-4,
-        p_mlm=0.15,
-    )
+        print("\nTraining finished.")
+        print(f"Logs written to {log_path}")
 
 
-if __name__ == "__main__":
-    main()
+    # =================================================
+    # Dummy data + main
+    # =================================================
+    def make_synth_joint_nested(self, n_seq: int, vocab_size: int) -> List[List[List[int]]]:
+        rng = random.Random(0)
+        joint = []
+        for _ in range(n_seq):
+            demo = [rng.randint(3, 200) for _ in range(3)]
+            ev = [rng.randint(3, vocab_size - 1) for _ in range(rng.randint(10, 60))]
+            joint.append([demo, ev])
+        return joint
+
+
+    def main(self, sequences) -> None:
+        vocab_size = 70000
+
+        class MiniVocab:
+            def get_padding_token(self): return "[PAD]"
+            def get_masking_token(self): return "[MASK]"
+            def get_unknown_token(self): return "[UNK]"
+            def token_to_id(self, tok: str) -> int:
+                return {"[PAD]": 0, "[MASK]": 1, "[UNK]": 2}[tok]
+
+        vocab = MiniVocab()
+
+        # VOCAB_PATH = Path("../out/vocab/vocabulary.json")
+        # vocab = Vocabulary.load(VOCAB_PATH)
+
+        cfg = CompactTransformerConfig(
+            vocab_size=vocab_size,
+            max_len=128,
+            d_model=192,
+            n_layers=3,
+            n_heads=6,
+            use_event_type_embeddings=True,
+            n_event_types=2,
+            pad_token_id=0,
+            mask_token_id=1,
+        )
+
+        #joint = make_synth_joint_nested(800, vocab_size)
+
+        input_ids, attn, seg = build_from_joint_format(
+            joint_data=sequences,
+            max_len=cfg.max_len,
+            pad_id=cfg.pad_token_id,
+        )
+
+        self.train_mlm(
+            vocab=vocab,
+            input_ids=input_ids,
+            attention_mask=attn,
+            segment_ids=seg,
+            cfg=cfg,
+            steps=300,
+            batch_size=16,
+            lr=3e-4,
+            p_mlm=0.15,
+        )

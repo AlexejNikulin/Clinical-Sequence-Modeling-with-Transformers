@@ -136,6 +136,8 @@ class CompactTransformerEncoder(nn.Module):
 
         logits = self.lm_head(x)  # [B, L, V]
 
+        #print("LOGITS: ", logits)
+
         out: Dict[str, Any] = {"logits": logits}
 
         if labels is not None:
@@ -148,6 +150,8 @@ class CompactTransformerEncoder(nn.Module):
                 labels.view(-1),
                 ignore_index=-100,
             )
+
+
             out["loss"] = loss
 
         if return_hidden:

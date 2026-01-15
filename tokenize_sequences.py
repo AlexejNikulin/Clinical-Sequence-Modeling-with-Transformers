@@ -1,92 +1,115 @@
 import json
-from typing import List, Tuple, Any
+from typing import List, Any, Tuple, Optional
 from pathlib import Path
+
 
 class TokenSequencer:
     """
-    Tokenize sequences and pad/clip for transformer input.
+    Converts nested token sequences into nested ID sequences for our transformer.
 
-    Adapted to project Vocabulary API:
-    - vocab.token_to_id(token)
-    - vocab.get_padding_token()
-    - vocab.get_unknown_token()
+    Expected token input format (per patient):
+      [
+        [demo_tokens],   # e.g. ["[DEM_GENDER_F]", "[DEM_AGE_52]", ...]
+        [event_tokens],  # e.g. ["[ADM]", "[DIAG_9_6820]", "[MED_HEPARIN]", ...]
+      ]
+
+    Output ID format (per patient):
+      [
+        [demo_ids],
+        [event_ids],
+      ]
+
+    NOTE:
+    - No padding here!
+    - Padding/masks/segment_ids are created later via build_from_joint_format(...)
     """
 
-    def tokenize_and_pad_from_tokens(
+    def tokens_to_ids_joint(
         self,
-        sequences: List[List[List[Any], List[Any]]],
+        joint_token_sequences: List[List[List[Any]]],
         vocab,
-        max_len: int = 512,
-        keep: str = "last",  # "last" or "first"
-    ) -> Tuple[List[List[List[int], List[int]]], List[List[List[int], List[int]]]]:
-        """
-        Use this if sequences are already provided as token strings, e.g.:
-        ["[ADM]", "[DIAG_I10]", "[MED_LISINOPRIL]", ...]
-
-        Returns:
-        input_ids: List[List[int]] shape [N, max_len]
-        attention_masks: List[List[int]] shape [N, max_len]
-        """
+        *,
+        drop_empty: bool = True,
+        keep_unk: bool = True,
+    ) -> List[List[List[int]]]:
         pad_id = vocab.token_to_id(vocab.get_padding_token())
         unk_id = vocab.token_to_id(vocab.get_unknown_token())
 
-        input_ids: List[List[List[int], List[int]]] = []
-        attention_masks: List[List[List[int], List[int]]] = []
+        joint_ids: List[List[List[int]]] = []
 
-        for seq in sequences:
-            event_ids: List[List[int]] = []
+        for i, patient in enumerate(joint_token_sequences):
+            if not isinstance(patient, list) or len(patient) != 2:
+                raise ValueError(
+                    f"Invalid patient entry at index {i}. "
+                    f"Expected [[demo_tokens],[event_tokens]], got: {patient}"
+                )
 
-            for tokens in seq:
-                ids: List[int] = []
+            demo_tokens, event_tokens = patient
 
-                for tok in tokens:
-                    if tok is None or str(tok).strip() == "":
-                        continue
-                    token_str = str(tok).strip()
-                    token_id = vocab.token_to_id(token_str) if token_str else unk_id
-                    ids.append(token_id)
+            demo_ids: List[int] = []
+            event_ids: List[int] = []
 
-                # Clip
-                if len(ids) > max_len:
-                    ids = ids[-max_len:] if keep == "last" else ids[:max_len]
+            # --- DEMO ---
+            for tok in demo_tokens:
+                if tok is None:
+                    continue
+                s = str(tok).strip()
+                if s == "":
+                    continue
+                tid = vocab.token_to_id(s)
+                # vocab.token_to_id returns UNK id in your implementation, but keep it explicit:
+                if tid == unk_id and not keep_unk:
+                    continue
+                # never carry PAD from upstream
+                if tid == pad_id:
+                    continue
+                demo_ids.append(tid)
 
-                # Attention mask (before padding)
-                mask = [1] * len(ids)
+            # --- EVENTS ---
+            for tok in event_tokens:
+                if tok is None:
+                    continue
+                s = str(tok).strip()
+                if s == "":
+                    continue
+                tid = vocab.token_to_id(s)
+                if tid == unk_id and not keep_unk:
+                    continue
+                if tid == pad_id:
+                    continue
+                event_ids.append(tid)
 
-                # Pad
-                while len(ids) < max_len:
-                    ids.append(pad_id)
-                    mask.append(0)
+            if drop_empty:
+                # If events are empty, MLM masking (events-only) can produce n_masked=0
+                # You can decide: drop such patients, or keep them and use --mask_demo later.
+                if len(event_ids) == 0:
+                    continue
 
-                event_ids.append(ids)
-                attention_masks.append(mask) 
-            input_ids.append(event_ids)
+            joint_ids.append([demo_ids, event_ids])
 
-        return input_ids, attention_masks
+        return joint_ids
 
-    def build_sequences(self, token_sequences):
-        import pandas as pd
+    def build_sequences(
+        self,
+        token_sequences: List[List[List[Any]]],
+        *,
+        vocab_path: Path = Path("../out/vocab/vocabulary.json"),
+        out_json: Optional[Path] = Path("../out/joint_ids.json"),
+        drop_empty: bool = True,
+    ) -> List[List[List[int]]]:
         from vocabulary import Vocabulary
 
-        VOCAB_PATH = Path("../out/vocab/vocabulary.json")
-        vocab = Vocabulary.load(VOCAB_PATH)
+        vocab = Vocabulary.load(vocab_path)
 
-        # token_sequences = [
-        # [["[DEM_GENDER_F]", "[DEM_YEARGRP_2014_2016]", "[DEM_AGE_52]"], ["[ADM]", "[DIAG_9_6820]", "[MED_HEPARIN]", "[DEATH]"]],
-        # [["[DEM_AGE_34]", "[DEM_YEARGRP_2017_2019]", "[DEM_AGE_74]"], ["[ADM]", "[DIAG_9_4019]", "[READM]"]]
-        # ]
+        joint_ids = self.tokens_to_ids_joint(
+            token_sequences,
+            vocab,
+            drop_empty=drop_empty,
+        )
 
-        ids, masks = self.tokenize_and_pad_from_tokens(token_sequences, vocab)
+        if out_json is not None:
+            out_json.parent.mkdir(parents=True, exist_ok=True)
+            with open(out_json, "w", encoding="utf-8") as f:
+                json.dump(joint_ids, f, indent=2)
 
-        path = Path("../out/ids.json")
-        data = ids
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-
-        # print("\nToken-based sequences -> input_ids:")
-        # for row in ids:
-        #     print(row)
-
-        # print("\nToken-based sequences -> attention_masks:")
-        # for row in masks:
-        #     print(row)
+        return joint_ids
