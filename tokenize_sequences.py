@@ -1,3 +1,4 @@
+import json
 from typing import List, Tuple, Any
 from pathlib import Path
 
@@ -58,28 +59,34 @@ class TokenSequencer:
                     mask.append(0)
 
                 event_ids.append(ids)
-                attention_masks.append(mask)
+                attention_masks.append(mask) 
             input_ids.append(event_ids)
 
         return input_ids, attention_masks
 
-    def build_sequences(self):
+    def build_sequences(self, token_sequences):
         import pandas as pd
         from vocabulary import Vocabulary
 
         VOCAB_PATH = Path("../out/vocab/vocabulary.json")
         vocab = Vocabulary.load(VOCAB_PATH)
 
-        token_sequences = [
-        [["[DEM_GENDER_F]", "[DEM_YEARGRP_2014_2016]", "[DEM_AGE_52]"], ["[ADM]", "[DIAG_9_6820]", "[MED_HEPARIN]", "[DEATH]"]],
-        [["[DEM_AGE_34]", "[DEM_YEARGRP_2017_2019]", "[DEM_AGE_74]"], ["[ADM]", "[DIAG_9_4019]", "[READM]"]]
-        ]
+        # token_sequences = [
+        # [["[DEM_GENDER_F]", "[DEM_YEARGRP_2014_2016]", "[DEM_AGE_52]"], ["[ADM]", "[DIAG_9_6820]", "[MED_HEPARIN]", "[DEATH]"]],
+        # [["[DEM_AGE_34]", "[DEM_YEARGRP_2017_2019]", "[DEM_AGE_74]"], ["[ADM]", "[DIAG_9_4019]", "[READM]"]]
+        # ]
 
-        ids, masks = self.tokenize_and_pad_from_tokens(token_sequences, vocab, max_len=6)
-        print("\nToken-based sequences -> input_ids:")
-        for row in ids:
-            print(row)
+        ids, masks = self.tokenize_and_pad_from_tokens(token_sequences, vocab)
 
-        print("\nToken-based sequences -> attention_masks:")
-        for row in masks:
-            print(row)
+        path = Path("../out/ids.json")
+        data = ids
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+
+        # print("\nToken-based sequences -> input_ids:")
+        # for row in ids:
+        #     print(row)
+
+        # print("\nToken-based sequences -> attention_masks:")
+        # for row in masks:
+        #     print(row)
