@@ -416,21 +416,21 @@ class Transformer:
     def main(self, sequences) -> None:
         vocab_size = 70000
 
-        class MiniVocab:
-            def get_padding_token(self): return "[PAD]"
-            def get_masking_token(self): return "[MASK]"
-            def get_unknown_token(self): return "[UNK]"
-            def token_to_id(self, tok: str) -> int:
-                return {"[PAD]": 0, "[MASK]": 1, "[UNK]": 2}[tok]
+        # class MiniVocab:
+        #     def get_padding_token(self): return "[PAD]"
+        #     def get_masking_token(self): return "[MASK]"
+        #     def get_unknown_token(self): return "[UNK]"
+        #     def token_to_id(self, tok: str) -> int:
+        #         return {"[PAD]": 0, "[MASK]": 1, "[UNK]": 2}[tok]
 
-        vocab = MiniVocab()
+        # vocab = MiniVocab()
 
-        # VOCAB_PATH = Path("../out/vocab/vocabulary.json")
-        # vocab = Vocabulary.load(VOCAB_PATH)
+        VOCAB_PATH = Path("../out/vocab/vocabulary.json")
+        vocab = Vocabulary.load(VOCAB_PATH)
 
         cfg = CompactTransformerConfig(
             vocab_size=vocab_size,
-            max_len=128,
+            max_len=256,
             d_model=192,
             n_layers=3,
             n_heads=6,
