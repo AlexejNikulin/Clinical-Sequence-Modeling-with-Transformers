@@ -13,11 +13,11 @@ class TokenSequencer:
 
     def tokenize_and_pad_from_tokens(
         self,
-        sequences: List[List[str]],
+        sequences: List[List[List[Any], List[Any]]],
         vocab,
         max_len: int = 512,
         keep: str = "last",  # "last" or "first"
-    ) -> Tuple[List[List[int]], List[List[int]]]:
+    ) -> Tuple[List[List[List[int], List[int]]], List[List[List[int], List[int]]]]:
         """
         Use this if sequences are already provided as token strings, e.g.:
         ["[ADM]", "[DIAG_I10]", "[MED_LISINOPRIL]", ...]
@@ -29,79 +29,39 @@ class TokenSequencer:
         pad_id = vocab.token_to_id(vocab.get_padding_token())
         unk_id = vocab.token_to_id(vocab.get_unknown_token())
 
-        input_ids: List[List[int]] = []
-        attention_masks: List[List[int]] = []
+        input_ids: List[List[List[int], List[int]]] = []
+        attention_masks: List[List[List[int], List[int]]] = []
 
         for seq in sequences:
-            ids: List[int] = []
+            event_ids: List[List[int]] = []
 
-            for tok in seq:
-                if tok is None or str(tok).strip() == "":
-                    continue
-                token_str = str(tok).strip()
-                token_id = vocab.token_to_id(token_str) if token_str else unk_id
-                ids.append(token_id)
+            for tokens in seq:
+                ids: List[int] = []
 
-            # Clip
-            if len(ids) > max_len:
-                ids = ids[-max_len:] if keep == "last" else ids[:max_len]
+                for tok in tokens:
+                    if tok is None or str(tok).strip() == "":
+                        continue
+                    token_str = str(tok).strip()
+                    token_id = vocab.token_to_id(token_str) if token_str else unk_id
+                    ids.append(token_id)
 
-            # Attention mask (before padding)
-            mask = [1] * len(ids)
+                # Clip
+                if len(ids) > max_len:
+                    ids = ids[-max_len:] if keep == "last" else ids[:max_len]
 
-            # Pad
-            while len(ids) < max_len:
-                ids.append(pad_id)
-                mask.append(0)
+                # Attention mask (before padding)
+                mask = [1] * len(ids)
 
-            input_ids.append(ids)
-            attention_masks.append(mask)
+                # Pad
+                while len(ids) < max_len:
+                    ids.append(pad_id)
+                    mask.append(0)
 
-        return input_ids, attention_masks
-
-
-    def tokenize_and_pad_from_rows(
-        self,
-        sequences: List[List[Any]],
-        vocab,
-        max_len: int = 512,
-        keep: str = "last",  # "last" or "first"
-    ) -> Tuple[List[List[int]], List[List[int]]]:
-        """
-        Use this if sequences are provided as event rows (e.g. pd.Series),
-        and tokens are generated via vocab.row_to_token(row).
-        """
-        pad_id = vocab.token_to_id(vocab.get_padding_token())
-        unk_id = vocab.token_to_id(vocab.get_unknown_token())
-
-        input_ids: List[List[int]] = []
-        attention_masks: List[List[int]] = []
-
-        for seq_rows in sequences:
-            ids: List[int] = []
-
-            for row in seq_rows:
-                token = vocab.row_to_token(row)
-                token_id = vocab.token_to_id(token)
-                ids.append(token_id)
-
-            # Clip
-            if len(ids) > max_len:
-                ids = ids[-max_len:] if keep == "last" else ids[:max_len]
-
-            # Attention mask (before padding)
-            mask = [1] * len(ids)
-
-            # Pad
-            while len(ids) < max_len:
-                ids.append(pad_id)
-                mask.append(0)
-
-            input_ids.append(ids)
-            attention_masks.append(mask)
+                event_ids.append(ids)
+                attention_masks.append(mask)
+            input_ids.append(event_ids)
 
         return input_ids, attention_masks
-
 
     def build_sequences(self):
         import pandas as pd
@@ -111,9 +71,8 @@ class TokenSequencer:
         vocab = Vocabulary.load(VOCAB_PATH)
 
         token_sequences = [
-            ["[ADM]", "[DIAG_9_496]", "[MED_RALTEGRAVIR]", "[DEATH]"],
-            ["[ADM]", "[DIAG_9_07071]", "[READM]"],
-            ["[ADM]", "[MED_NEW_DRUG]"], 
+        [["[DEM_GENDER_F]", "[DEM_YEARGRP_2014_2016]", "[DEM_AGE_52]"], ["[ADM]", "[DIAG_9_6820]", "[MED_HEPARIN]", "[DEATH]"]],
+        [["[DEM_AGE_34]", "[DEM_YEARGRP_2017_2019]", "[DEM_AGE_74]"], ["[ADM]", "[DIAG_9_4019]", "[READM]"]]
         ]
 
         ids, masks = self.tokenize_and_pad_from_tokens(token_sequences, vocab, max_len=6)

@@ -27,12 +27,14 @@ class TokenConverter:
 
         if pd.isna(raw_event):
             return self.get_unknown_token()
-
-        try:
-            event = int(raw_event)
-        except (ValueError, TypeError):
-            # e.g. "DEM", "LAB", "", None → skip
-            return self.get_unknown_token()
+        
+        if(raw_event == "DEM"):
+            return self.dem_to_token(row["event_value"])
+        else:
+            try:
+                event = int(raw_event)
+            except (ValueError, TypeError):
+                return self.get_unknown_token()
  
         if event == EventType.ADMISSION:
             return self.adm_to_token()
@@ -61,6 +63,9 @@ class TokenConverter:
  
         return None
  
+    def dem_to_token(self, event_value: str) -> str:
+        return f"[{event_value}]"
+
     def adm_to_token(self) -> str:
         return "[ADM]"
  
@@ -94,7 +99,8 @@ class Vocabulary:
     One global special-vocabulary + per-event vocabularies in 10k blocks.
  
     Ranges:
-      Special     : 0..9999
+      Special     : 0..9
+      Demographic : 10..9999
       Admission   : 10000..19999
       Diagnose    : 20000..29999
       Procedure   : 30000..39999
@@ -106,6 +112,7 @@ class Vocabulary:
  
     # token -> id maps
     special_vocab: Dict[str, int] = field(default_factory=dict)
+    dem_vocab: Dict[str, int] = field(default_factory=dict)
     admission_vocab: Dict[str, int] = field(default_factory=dict)
     diagnosis_vocab: Dict[str, int] = field(default_factory=dict)
     labevents_vocab: Dict[str, int] = field(default_factory=dict)
@@ -120,6 +127,7 @@ class Vocabulary:
  
     # Next free IDs per block
     _next_special: int = 0
+    _next_dem: int = 10
     _next_adm: int = 10000
     _next_diag: int = 20000
     _next_labev: int = 30000
@@ -129,11 +137,12 @@ class Vocabulary:
  
     def __init__(self, df = None):
         self.VOCAB_PATH = Path("../out/vocab/vocabulary.json")
-        self.COMBINED_CSV = Path("../out/merge_and_sort/combined.csv")
+        self.COMBINED_CSV = Path("../out/splits_out/combined_train.csv")
 
         self.token_converter = TokenConverter()
 
         self.special_vocab = {}
+        self.dem_vocab = {}
         self.admission_vocab = {}
         self.diagnosis_vocab = {}
         self.labevents_vocab = {}
@@ -150,6 +159,7 @@ class Vocabulary:
         path = Path(path)
         data = {
             "special": self.special_vocab,
+            "demographic": self.dem_vocab,
             "admission": self.admission_vocab,
             "diagnosis": self.diagnosis_vocab,
             "labevents": self.labevents_vocab,
@@ -172,6 +182,7 @@ class Vocabulary:
         vocab.token_converter = TokenConverter()
 
         vocab.special_vocab = {}
+        vocab.dem_vocab = {}
         vocab.admission_vocab = {}
         vocab.diagnosis_vocab = {}
         vocab.labevents_vocab = {}
@@ -180,6 +191,7 @@ class Vocabulary:
         vocab.death_vocab = {}
 
         vocab._next_special = 0
+        vocab._next_dem = 10
         vocab._next_adm = 10000
         vocab._next_diag = 20000
         vocab._next_labev = 30000
@@ -187,8 +199,8 @@ class Vocabulary:
         vocab._next_readm = 50000
         vocab._next_death = 60000
 
-        # --------- jetzt sicher ---------
         vocab.special_vocab = data["special"]
+        vocab.dem_vocab = data["demographic"]
         vocab.admission_vocab = data["admission"]
         vocab.diagnosis_vocab = data["diagnosis"]
         vocab.labevents_vocab = data["labevents"]
@@ -206,6 +218,7 @@ class Vocabulary:
             data = json.load(f)
 
         self.special_vocab = data["special"]
+        self.dem_vocab = data["demographic"]
         self.admission_vocab = data["admission"]
         self.diagnosis_vocab = data["diagnosis"]
         self.labevents_vocab = data["labevents"]
@@ -241,8 +254,7 @@ class Vocabulary:
             try:
                 event = int(raw_event)
             except (ValueError, TypeError):
-                # e.g. "DEM", "LAB", "", None → skip
-                continue
+                event = raw_event
 
             # ---------------------------------
             token = self.token_converter.convert_row_to_token_seq(row)
@@ -258,10 +270,17 @@ class Vocabulary:
     # -------------------------
     # Internal helpers
     # -------------------------
-    def _add_token(self, vocab: Dict[str, int], token: str, event: int) -> None:
+    def _add_token(self, vocab: Dict[str, int], token: str, event) -> None:
         if token in vocab:
             return
  
+        if token.startswith("[DEM"):
+            new_id = self._next_dem
+            if new_id > 9999:
+                raise RuntimeError("Demographic vocab exceeded 10000..19999 range.")
+            vocab[token] = new_id
+            self._next_dem += 1
+
         if event == EventType.ADMISSION:
             new_id = self._next_adm
             if new_id > 19999:
@@ -304,20 +323,28 @@ class Vocabulary:
             vocab[token] = new_id
             self._next_death += 1
  
-    def _vocab_for_event(self, event: int) -> Optional[Dict[str, int]]:
-        if event == EventType.ADMISSION:
-            return self.admission_vocab
-        if event == EventType.DIAGNOSE:
-            return self.diagnosis_vocab
-        if event == EventType.LABEVENTS:
-            return self.labevents_vocab
-        if event == EventType.MEDICATION:
-            return self.medication_vocab
-        if event == EventType.READMISSION:
-            return self.readmission_vocab
-        if event == EventType.DEATH:
-            return self.death_vocab
-        return None
+    def _vocab_for_event(self, raw_event) -> Optional[Dict[str, int]]:
+        if(raw_event == "DEM"):
+            return self.dem_vocab
+        else:
+            try:
+                event = int(raw_event)
+            except (ValueError, TypeError):
+                return None
+            
+            if event == EventType.ADMISSION:
+                return self.admission_vocab
+            if event == EventType.DIAGNOSE:
+                return self.diagnosis_vocab
+            if event == EventType.LABEVENTS:
+                return self.labevents_vocab
+            if event == EventType.MEDICATION:
+                return self.medication_vocab
+            if event == EventType.READMISSION:
+                return self.readmission_vocab
+            if event == EventType.DEATH:
+                return self.death_vocab
+            return None
        
     # -------------------------
     # Requested: row -> token, fallback to global UNK if missing
@@ -335,14 +362,8 @@ class Vocabulary:
 
         if pd.isna(raw_event):
             return self.UNK
-
-        try:
-            event = int(raw_event)
-        except (ValueError, TypeError):
-            # e.g. "DEM", "LAB", "", None → skip
-            return self.UNK
  
-        vocab = self._vocab_for_event(int(row["event_type"]))
+        vocab = self._vocab_for_event(row["event_type"])
         if vocab is None:
             return self.UNK
  
@@ -358,6 +379,8 @@ class Vocabulary:
         """
         if token in self.special_vocab:
             return self.special_vocab[token]
+        if token in self.dem_vocab:
+            return self.dem_vocab[token]
         if token in self.admission_vocab:
             return self.admission_vocab[token]
         if token in self.diagnosis_vocab:

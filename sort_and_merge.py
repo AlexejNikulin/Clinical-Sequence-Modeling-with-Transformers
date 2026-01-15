@@ -87,17 +87,18 @@ class SortMerger:
                     subject_ids_with_file.add(subject_id)
 
     def sort_and_merge(self):
-        admissions_df = pd.read_csv(self.ADMISSION_CSV, self.MAX_ROWS_PER_FILE)
+        admissions_df = pd.read_csv(self.ADMISSION_CSV, nrows=self.MAX_ROWS_PER_FILE)
         subject_ids = admissions_df["subject_id"].unique()
 
         subject_ids_with_file = set()
+
         # Create one file for each patient
-        # os.makedirs(PATIENT_CSV_PATH)
-        # write_patient_events_for_file(ADMISSION_CSV, subject_ids_with_file)
-        # write_patient_events_for_file(DIAGNOSES_CSV, subject_ids_with_file)
-        # write_patient_events_for_file(DISCHARGES_CSV, subject_ids_with_file)
-        # write_patient_events_for_file(MEDICATION_CSV, subject_ids_with_file)
-        # write_patient_events_for_file(LABEVENTS_CSV, subject_ids_with_file)
+        # os.makedirs(self.PATIENT_CSV_PATH)
+        # self.write_patient_events_for_file(self.ADMISSION_CSV, subject_ids_with_file)
+        # self.write_patient_events_for_file(self.DIAGNOSES_CSV, subject_ids_with_file)
+        # self.write_patient_events_for_file(self.DISCHARGES_CSV, subject_ids_with_file)
+        # self.write_patient_events_for_file(self.MEDICATION_CSV, subject_ids_with_file)
+        # self.write_patient_events_for_file(self.LABEVENTS_CSV, subject_ids_with_file)
 
         # For each patient, sort the events, and append them to the global dataframe
         patient_files = os.listdir(self.PATIENT_CSV_PATH)
