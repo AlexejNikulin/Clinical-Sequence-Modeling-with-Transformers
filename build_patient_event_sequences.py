@@ -40,32 +40,40 @@ def build_patient_event_sequences(
         List[List[str]]: one ordered list of event strings per subject_id
     """
 
-    df = df.copy()
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
-    df = df.sort_values(["subject_id", "timestamp"])
-
-    def event_to_string(row) -> str:
-        source = str(row["source"])
-        stage = SOURCE_TO_STAGE.get(source, source)  # Map source to stage
-        value = row.get("event_value")
-
-        if pd.isna(value) or str(value).strip() == "":
-            return stage
-        else:
-            return f"{stage}::{value}"
-
-    df["event_string"] = df.apply(event_to_string, axis=1)
+    MAX_TIME_GAP = 0.1
+    
+    converter = TokenConverter()
 
     sequences = []
 
+    df = df.copy()
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+
     for subject_id, group in df.groupby("subject_id"):
-        patient_sequence = []
+        patient_sequences = [[], []]
 
-        patient_sequence.append(f"patient::{subject_id}")
+        previous_timestamp = None
 
-        patient_sequence.extend(group["event_string"].tolist())
+        for _, row in group.iterrows():
+            current_timestamp = row["timestamp"]
+            event = converter.convert_row_to_token_seq(row)
 
-        sequences.append(patient_sequence)
+            if previous_timestamp is not None:
+                gap_days = (current_timestamp - previous_timestamp).total_seconds() / 86400
+            else:
+                gap_days = 0.0
+
+            # Make sure that last event is neither too close nore a DEM event
+            if gap_days >= MAX_TIME_GAP & gap_days <= 36500:
+                # append Time Token
+                continue
+
+            if row["event_type"] == "DEM":
+                patient_sequences[0].append(event)
+            else:
+                patient_sequences[1].append(event)
+
+        sequences.appent(patient_sequences)
 
     return sequences
 
@@ -201,4 +209,5 @@ df = pd.read_csv(COMBINED_CSV)
 
 subject_id = 10000032
 visualize_sequence(df, subject_id)
+
 
