@@ -73,6 +73,8 @@ def build_patient_event_sequences(
             else:
                 patient_sequences[1].append(event)
 
+            previous_timestamp = current_timestamp
+
         sequences.appent(patient_sequences)
 
     return sequences
@@ -209,5 +211,6 @@ df = pd.read_csv(COMBINED_CSV)
 
 subject_id = 10000032
 visualize_sequence(df, subject_id)
+
 
 
