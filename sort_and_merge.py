@@ -81,12 +81,12 @@ def write_patient_events_for_file(file, subject_ids_with_file):
                 subject_ids_with_file.add(subject_id)
 
 # Create one file for each patient
-# os.makedirs(PATIENT_CSV_PATH)
-# write_patient_events_for_file(ADMISSION_CSV, subject_ids_with_file)
-# write_patient_events_for_file(DIAGNOSES_CSV, subject_ids_with_file)
-# write_patient_events_for_file(DISCHARGES_CSV, subject_ids_with_file)
-# write_patient_events_for_file(MEDICATION_CSV, subject_ids_with_file)
-# write_patient_events_for_file(LABEVENTS_CSV, subject_ids_with_file)
+os.makedirs(PATIENT_CSV_PATH)
+write_patient_events_for_file(ADMISSION_CSV, subject_ids_with_file)
+write_patient_events_for_file(DIAGNOSES_CSV, subject_ids_with_file)
+write_patient_events_for_file(DISCHARGES_CSV, subject_ids_with_file)
+write_patient_events_for_file(MEDICATION_CSV, subject_ids_with_file)
+write_patient_events_for_file(LABEVENTS_CSV, subject_ids_with_file)
 
 # For each patient, sort the events, and append them to the global dataframe
 patient_files = os.listdir(PATIENT_CSV_PATH)
@@ -123,6 +123,6 @@ for patient_file in tqdm(patient_files, desc="Merging patients"):
         index=False
     )
 
-    # os.remove(PATIENT_CSV_PATH + patient_file)
+    os.remove(PATIENT_CSV_PATH + patient_file)
 
     idx += 1
