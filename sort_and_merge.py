@@ -34,8 +34,6 @@ class SortMerger:
         if pd.isna(x):
             return "DEM_AGE_UNK"
         a = int(x)
-        if a >= 90:
-            return "DEM_AGE_90PLUS"
         return f"DEM_AGE_{a}"
 
     def make_demo_df(self, subject_id):
@@ -43,7 +41,7 @@ class SortMerger:
             return pd.DataFrame(columns=["subject_id","timestamp","event_type","event_value","result"])
         
         row = self.patients_df.loc[subject_id]
-        toks = [self.gender_tok(row["gender"]), self.age_tok(row["anchor_age"]), self.yeargrp_tok(row["anchor_year_group"])]
+        toks = [self.gender_tok(row["gender"]), self.age_tok(row["anchor_age"])] # , self.yeargrp_tok(row["anchor_year_group"])
 
         return pd.DataFrame({
             "subject_id": [subject_id]*len(toks),
@@ -93,12 +91,12 @@ class SortMerger:
         subject_ids_with_file = set()
 
         # Create one file for each patient
-        # os.makedirs(self.PATIENT_CSV_PATH)
-        # self.write_patient_events_for_file(self.ADMISSION_CSV, subject_ids_with_file)
-        # self.write_patient_events_for_file(self.DIAGNOSES_CSV, subject_ids_with_file)
-        # self.write_patient_events_for_file(self.DISCHARGES_CSV, subject_ids_with_file)
-        # self.write_patient_events_for_file(self.MEDICATION_CSV, subject_ids_with_file)
-        # self.write_patient_events_for_file(self.LABEVENTS_CSV, subject_ids_with_file)
+        os.makedirs(self.PATIENT_CSV_PATH)
+        self.write_patient_events_for_file(self.ADMISSION_CSV, subject_ids_with_file)
+        self.write_patient_events_for_file(self.DIAGNOSES_CSV, subject_ids_with_file)
+        self.write_patient_events_for_file(self.DISCHARGES_CSV, subject_ids_with_file)
+        self.write_patient_events_for_file(self.MEDICATION_CSV, subject_ids_with_file)
+        self.write_patient_events_for_file(self.LABEVENTS_CSV, subject_ids_with_file)
 
         # For each patient, sort the events, and append them to the global dataframe
         patient_files = os.listdir(self.PATIENT_CSV_PATH)

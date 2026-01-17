@@ -87,7 +87,7 @@ class TokenConverter:
         return f"[LAB_{icd_code}_{result}]" if result != "nan" else f"[LAB_{icd_code}]"
  
     def med_to_token(self, drug_cd: str, dose: str) -> str:
-        return f"[MED_{drug_cd}_{dose}]" if dose != "nan" else f"[LAB_{drug_cd}]"
+        return f"[MED_{drug_cd}_{dose}]" if dose != "nan" else f"[MED_{drug_cd}]"
     
     def get_unknown_token(self) -> str:
         return ["UNK"]
@@ -104,20 +104,22 @@ class Vocabulary:
     One global special-vocabulary + per-event vocabularies in 10k blocks.
  
     Ranges:
-      Special     : 0..99999
-      Demographic : 100000..199999
-      Admission   : 200000..299999
-      Diagnose    : 300000..399999
-      Procedure   : 400000..499999
-      Medication  : 500000..599999
-      Readmission : 600000..699999
-      Death       : 700000..799999
+      Special     : 0..4
+      Dem_gender  : 5..9
+      Dem_age     : 10..99999
+      Admission   : 100000..199999
+      Diagnose    : 200000..299999
+      Procedure   : 300000..399999
+      Medication  : 400000..499999
+      Readmission : 500000..599999
+      Death       : 600000..699999
     """
     token_converter: TokenConverter = field(default_factory=TokenConverter)
  
     # token -> id maps
     special_vocab: Dict[str, int] = field(default_factory=dict)
-    dem_vocab: Dict[str, int] = field(default_factory=dict)
+    dem_gen_vocab: Dict[str, int] = field(default_factory=dict)
+    dem_age_vocab: Dict[str, int] = field(default_factory=dict)
     admission_vocab: Dict[str, int] = field(default_factory=dict)
     diagnosis_vocab: Dict[str, int] = field(default_factory=dict)
     labevents_vocab: Dict[str, int] = field(default_factory=dict)
@@ -132,13 +134,14 @@ class Vocabulary:
  
     # Next free IDs per block
     _next_special: int = 0
-    _next_dem: int = 100000
-    _next_adm: int = 200000
-    _next_diag: int = 300000
-    _next_labev: int = 400000
-    _next_med: int = 500000
-    _next_readm: int = 600000
-    _next_death: int = 700000
+    _next_dem_gen: int = 5
+    _next_dem_age: int = 10
+    _next_adm: int = 100000
+    _next_diag: int = 200000
+    _next_labev: int = 300000
+    _next_med: int = 400000
+    _next_readm: int = 500000
+    _next_death: int = 600000
  
     def __init__(self, df = None):
         self.VOCAB_PATH = Path("../out/vocab/vocabulary.json")
@@ -147,7 +150,8 @@ class Vocabulary:
         self.token_converter = TokenConverter()
 
         self.special_vocab = {}
-        self.dem_vocab = {}
+        self.dem_gen_vocab = {}
+        self.dem_age_vocab = {}
         self.admission_vocab = {}
         self.diagnosis_vocab = {}
         self.labevents_vocab = {}
@@ -164,7 +168,8 @@ class Vocabulary:
         path = Path(path)
         data = {
             "special": self.special_vocab,
-            "demographic": self.dem_vocab,
+            "demographic_gender": self.dem_gen_vocab,
+            "demographic_age": self.dem_age_vocab,
             "admission": self.admission_vocab,
             "diagnosis": self.diagnosis_vocab,
             "labevents": self.labevents_vocab,
@@ -187,7 +192,8 @@ class Vocabulary:
         vocab.token_converter = TokenConverter()
 
         vocab.special_vocab = {}
-        vocab.dem_vocab = {}
+        vocab.dem_gen_vocab = {}
+        vocab.dem_age_vocab = {}
         vocab.admission_vocab = {}
         vocab.diagnosis_vocab = {}
         vocab.labevents_vocab = {}
@@ -196,16 +202,18 @@ class Vocabulary:
         vocab.death_vocab = {}
 
         vocab._next_special = 0
-        vocab._next_dem = 100000
-        vocab._next_adm = 200000
-        vocab._next_diag = 300000
-        vocab._next_labev = 400000
-        vocab._next_med = 500000
-        vocab._next_readm = 600000
-        vocab._next_death = 700000
+        vocab._next_dem_gen = 5
+        vocab._next_dem_age = 10
+        vocab._next_adm = 100000
+        vocab._next_diag = 200000
+        vocab._next_labev = 300000
+        vocab._next_med = 400000
+        vocab._next_readm = 500000
+        vocab._next_death = 600000
 
         vocab.special_vocab = data["special"]
-        vocab.dem_vocab = data["demographic"]
+        vocab.dem_gen_vocab = data["demographic_gender"]
+        vocab.dem_age_vocab = data["demographic_age"]
         vocab.admission_vocab = data["admission"]
         vocab.diagnosis_vocab = data["diagnosis"]
         vocab.labevents_vocab = data["labevents"]
@@ -223,7 +231,8 @@ class Vocabulary:
             data = json.load(f)
 
         self.special_vocab = data["special"]
-        self.dem_vocab = data["demographic"]
+        self.dem_gen_vocab = data["demographic_gender"]
+        self.dem_age_vocab = data["demographic_age"]
         self.admission_vocab = data["admission"]
         self.diagnosis_vocab = data["diagnosis"]
         self.labevents_vocab = data["labevents"]
@@ -266,7 +275,7 @@ class Vocabulary:
             if token is None:
                 continue
 
-            vocab = self._vocab_for_event(event)
+            vocab = self._vocab_for_event(row)
             if vocab is None:
                 continue
 
@@ -279,58 +288,71 @@ class Vocabulary:
         if token in vocab:
             return
  
-        if token.startswith("[DEM"):
-            new_id = self._next_dem
-            if new_id > 199999:
-                raise RuntimeError("Demographic vocab exceeded 10000..19999 range.")
+        if token.startswith("[DEM_G"):
+            new_id = self._next_dem_gen
+            if new_id > 10:
+                raise RuntimeError("Demographic gender vocab exceeded 5..10 range.")
             vocab[token] = new_id
-            self._next_dem += 1
+            self._next_dem_gen += 1
+
+        if token.startswith("[DEM_A"):
+            new_id = self._next_dem_age
+            if new_id > 99999:
+                raise RuntimeError("Demographic age vocab exceeded 10..99999 range.")
+            vocab[token] = new_id
+            self._next_dem_age += 1
 
         if event == EventType.ADMISSION:
             new_id = self._next_adm
-            if new_id > 299999:
-                raise RuntimeError("Admission vocab exceeded 10000..19999 range.")
+            if new_id > 199999:
+                raise RuntimeError("Admission vocab exceeded 100000..199999 range.")
             vocab[token] = new_id
             self._next_adm += 1
  
         elif event == EventType.DIAGNOSE:
             new_id = self._next_diag
-            if new_id > 399999:
-                raise RuntimeError("Diagnosis vocab exceeded 20000..29999 range.")
+            if new_id > 299999:
+                raise RuntimeError("Diagnosis vocab exceeded 200000..299999 range.")
             vocab[token] = new_id
             self._next_diag += 1
  
         elif event == EventType.LABEVENTS:
             new_id = self._next_labev
-            if new_id > 499999:
-                raise RuntimeError("Labevents vocab exceeded 30000..39999 range.")
+            if new_id > 399999:
+                raise RuntimeError("Labevents vocab exceeded 300000..399999 range.")
             vocab[token] = new_id
             self._next_labev += 1
  
         elif event == EventType.MEDICATION:
             new_id = self._next_med
-            if new_id > 599999:
-                raise RuntimeError("Medication vocab exceeded 40000..49999 range.")
+            if new_id > 499999:
+                raise RuntimeError("Medication vocab exceeded 400000..499999 range.")
             vocab[token] = new_id
             self._next_med += 1
  
         elif event == EventType.DISCHARGE:
             new_id = self._next_readm
-            if new_id > 699999:
-                raise RuntimeError("Readmission vocab exceeded 50000..59999 range.")
+            if new_id > 599999:
+                raise RuntimeError("Readmission vocab exceeded 500000..599999 range.")
             vocab[token] = new_id
             self._next_readm += 1
  
         elif event == EventType.DEATH:
             new_id = self._next_death
-            if new_id > 799999:
-                raise RuntimeError("Death vocab exceeded 60000..69999 range.")
+            if new_id > 699999:
+                raise RuntimeError("Death vocab exceeded 600000..699999 range.")
             vocab[token] = new_id
             self._next_death += 1
  
-    def _vocab_for_event(self, raw_event) -> Optional[Dict[str, int]]:
+    def _vocab_for_event(self, row) -> Optional[Dict[str, int]]:
+        raw_event = row["event_type"]
+        raw_value = row["event_value"]
+
         if(raw_event == "DEM"):
-            return self.dem_vocab
+            if(raw_value.startswith("DEM_G")):
+                return self.dem_gen_vocab
+            elif(raw_value.startswith("DEM_A")):
+                return self.dem_age_vocab
         else:
             try:
                 event = int(raw_event)
@@ -368,7 +390,7 @@ class Vocabulary:
         if pd.isna(raw_event):
             return self.UNK
  
-        vocab = self._vocab_for_event(row["event_type"])
+        vocab = self._vocab_for_event(row)
         if vocab is None:
             return self.UNK
  
@@ -384,8 +406,10 @@ class Vocabulary:
         """
         if token in self.special_vocab:
             return self.special_vocab[token]
-        if token in self.dem_vocab:
-            return self.dem_vocab[token]
+        if token in self.dem_gen_vocab:
+            return self.dem_gen_vocab[token]
+        if token in self.dem_age_vocab:
+            return self.dem_age_vocab[token]
         if token in self.admission_vocab:
             return self.admission_vocab[token]
         if token in self.diagnosis_vocab:
