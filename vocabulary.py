@@ -49,9 +49,10 @@ class TokenConverter:
  
         elif event == EventType.LABEVENTS:
             icd_code = str(row["event_value"]).strip()
+            result = str(row["result"]).strip()
             #icd_version = row["icd_version"]
             #is_icd_10 = int(icd_version) == 10
-            return self.lab_to_token(icd_code)
+            return self.lab_to_token(icd_code, result)
  
         elif event == EventType.MEDICATION:
             drug_cd = str(row["event_value"]).strip()
@@ -82,11 +83,11 @@ class TokenConverter:
     def diag_to_token(self, icd_code: str, is_icd_10: bool) -> str:
         return f"[DIAG{icd_code}]" if is_icd_10 else f"[DIAG9_{icd_code}]"
  
-    def lab_to_token(self, icd_code: str) -> str:
-        return f"[LAB_{icd_code}]"
+    def lab_to_token(self, icd_code: str, result: str) -> str:
+        return f"[LAB_{icd_code}_{result}]" if result != "nan" else f"[LAB_{icd_code}]"
  
     def med_to_token(self, drug_cd: str, dose: str) -> str:
-        return f"[MED_{drug_cd}_{dose}]"
+        return f"[MED_{drug_cd}_{dose}]" if dose != "nan" else f"[LAB_{drug_cd}]"
     
     def get_unknown_token(self) -> str:
         return ["UNK"]
