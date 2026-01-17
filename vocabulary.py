@@ -55,7 +55,8 @@ class TokenConverter:
  
         elif event == EventType.MEDICATION:
             drug_cd = str(row["event_value"]).strip()
-            return self.med_to_token(drug_cd)
+            dose = str(row["result"]).strip()
+            return self.med_to_token(drug_cd, dose)
  
         elif event == EventType.DISCHARGE:
             dis_type = str(row["result"]).strip()
@@ -84,8 +85,8 @@ class TokenConverter:
     def lab_to_token(self, icd_code: str) -> str:
         return f"[LAB_{icd_code}]"
  
-    def med_to_token(self, drug_cd: str) -> str:
-        return f"[MED_{drug_cd}]"
+    def med_to_token(self, drug_cd: str, dose: str) -> str:
+        return f"[MED_{drug_cd}_{dose}]"
     
     def get_unknown_token(self) -> str:
         return ["UNK"]
