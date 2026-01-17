@@ -9,7 +9,7 @@ from tqdm import tqdm
  
 class EventType(IntEnum):
     ADMISSION = 0
-    READMISSION = 1
+    DISCHARGE = 1
     DIAGNOSE = 2
     LABEVENTS = 3
     MEDICATION = 4
@@ -57,8 +57,9 @@ class TokenConverter:
             drug_cd = str(row["event_value"]).strip()
             return self.med_to_token(drug_cd)
  
-        elif event == EventType.READMISSION:
-            return self.readm_to_token()
+        elif event == EventType.DISCHARGE:
+            dis_type = str(row["result"]).strip()
+            return self.readm_to_token(dis_type)
  
         elif event == EventType.DEATH:
             return self.death_to_token()
@@ -71,8 +72,8 @@ class TokenConverter:
     def adm_to_token(self, adm_type: str) -> str:
         return f"[ADM_{adm_type}]"
  
-    def readm_to_token(self) -> str:
-        return "[READM]"
+    def readm_to_token(self, dis_type) -> str:
+        return f"[READM_{dis_type}]"
  
     def death_to_token(self) -> str:
         return "[DEATH]"
@@ -311,7 +312,7 @@ class Vocabulary:
             vocab[token] = new_id
             self._next_med += 1
  
-        elif event == EventType.READMISSION:
+        elif event == EventType.DISCHARGE:
             new_id = self._next_readm
             if new_id > 699999:
                 raise RuntimeError("Readmission vocab exceeded 50000..59999 range.")
@@ -342,7 +343,7 @@ class Vocabulary:
                 return self.labevents_vocab
             if event == EventType.MEDICATION:
                 return self.medication_vocab
-            if event == EventType.READMISSION:
+            if event == EventType.DISCHARGE:
                 return self.readmission_vocab
             if event == EventType.DEATH:
                 return self.death_vocab
