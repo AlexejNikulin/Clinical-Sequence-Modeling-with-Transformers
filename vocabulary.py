@@ -280,6 +280,9 @@ class Vocabulary:
                 continue
 
             self._add_token(vocab, token, event)
+
+            if(vocab == self.dem_age_vocab):
+                self.dem_age_vocab = dict(sorted(self.dem_age_vocab.items(), key=lambda item: item[1]))
  
     # -------------------------
     # Internal helpers
@@ -299,8 +302,15 @@ class Vocabulary:
             new_id = self._next_dem_age
             if new_id > 99999:
                 raise RuntimeError("Demographic age vocab exceeded 10..99999 range.")
-            vocab[token] = new_id
-            self._next_dem_age += 1
+            
+            age_str = token.removeprefix("[DEM_AGE_")
+            age_str = age_str.removesuffix("]")
+            try:
+                age = int(age_str)
+                vocab[token] = age
+                self._next_dem_age += 1
+            except (ValueError, TypeError):
+                return RuntimeError("Wrong age token!")
 
         if event == EventType.ADMISSION:
             new_id = self._next_adm
