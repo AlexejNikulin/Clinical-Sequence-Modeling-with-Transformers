@@ -32,6 +32,10 @@ import pandas as pd
 # sequences = eventSequencer.build_patient_event_sequences(df)
 
 # # 6 - tokenize_sequences
+# sequences = [
+#     ["[DEM_GENDER_F]", "[DEM_AGE_19]", "[ADM_EU OBSERVATION]", "[LAB_CREATININE]", "[MED_ATORVASTATIN]", "[READM_EU OBSERVATION]"],
+#     ["[DEM_GENDER_M]", "[DEM_AGE_59]", "[ADM_OBSERVATION ADMIT]", "[DIAG9_5715]", "[DEATH]"]
+# ]
 # tokenSequencer = TokenSequencer()
 # ids = tokenSequencer.build_sequences(sequences)
 

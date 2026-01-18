@@ -1,115 +1,106 @@
 import json
-from typing import List, Any, Tuple, Optional
+from typing import List, Any, Optional
 from pathlib import Path
 
 
 class TokenSequencer:
     """
-    Converts nested token sequences into nested ID sequences for our transformer.
+    Converts per-patient token sequences into per-patient ID sequences.
 
-    Expected token input format (per patient):
+    NEW expected token input format (per patient):
       [
-        [demo_tokens],   # e.g. ["[DEM_GENDER_F]", "[DEM_AGE_52]", ...]
-        [event_tokens],  # e.g. ["[ADM]", "[DIAG_9_6820]", "[MED_HEPARIN]", ...]
+        demo_tokens + event_tokens
+      ]
+
+    i.e. one list per patient:
+      [
+        ["[DEM_GENDER_F]", "[DEM_AGE_52]", ..., "[ADM]", "[DIAG_9_6820]", ...]
       ]
 
     Output ID format (per patient):
       [
-        [demo_ids],
-        [event_ids],
+        [ids]
       ]
 
     NOTE:
     - No padding here!
-    - Padding/masks/segment_ids are created later via build_from_joint_format(...)
+    - Padding/masks are created later.
     """
 
-    def tokens_to_ids_joint(
+    def tokens_to_ids(
         self,
-        joint_token_sequences: List[List[List[Any]]],
+        token_sequences: List[List[Any]],
         vocab,
         *,
         drop_empty: bool = True,
         keep_unk: bool = True,
-    ) -> List[List[List[int]]]:
+        min_len: int = 1,
+    ) -> List[List[int]]:
         pad_id = vocab.token_to_id(vocab.get_padding_token())
         unk_id = vocab.token_to_id(vocab.get_unknown_token())
 
-        joint_ids: List[List[List[int]]] = []
+        all_ids: List[List[int]] = []
 
-        for i, patient in enumerate(joint_token_sequences):
-            if not isinstance(patient, list) or len(patient) != 2:
+        for i, seq in enumerate(token_sequences):
+            if not isinstance(seq, list):
                 raise ValueError(
-                    f"Invalid patient entry at index {i}. "
-                    f"Expected [[demo_tokens],[event_tokens]], got: {patient}"
+                    f"Invalid patient entry at index {i}. Expected a list of tokens, got: {type(seq)}"
                 )
 
-            demo_tokens, event_tokens = patient
+            ids: List[int] = []
 
-            demo_ids: List[int] = []
-            event_ids: List[int] = []
-
-            # --- DEMO ---
-            for tok in demo_tokens:
+            for tok in seq:
                 if tok is None:
                     continue
                 s = str(tok).strip()
                 if s == "":
                     continue
+
                 tid = vocab.token_to_id(s)
-                # vocab.token_to_id returns UNK id in your implementation, but keep it explicit:
+
+                # optionally drop unknowns
                 if tid == unk_id and not keep_unk:
                     continue
+
                 # never carry PAD from upstream
                 if tid == pad_id:
                     continue
-                demo_ids.append(tid)
 
-            # --- EVENTS ---
-            for tok in event_tokens:
-                if tok is None:
-                    continue
-                s = str(tok).strip()
-                if s == "":
-                    continue
-                tid = vocab.token_to_id(s)
-                if tid == unk_id and not keep_unk:
-                    continue
-                if tid == pad_id:
-                    continue
-                event_ids.append(tid)
+                ids.append(tid)
 
             if drop_empty:
-                # If events are empty, MLM masking (events-only) can produce n_masked=0
-                # You can decide: drop such patients, or keep them and use --mask_demo later.
-                if len(event_ids) == 0:
+                if len(ids) < min_len:
                     continue
 
-            joint_ids.append([demo_ids, event_ids])
+            all_ids.append(ids)
 
-        return joint_ids
+        return all_ids
 
     def build_sequences(
         self,
-        token_sequences: List[List[List[Any]]],
+        token_sequences: List[List[Any]],
         *,
         vocab_path: Path = Path("../out/vocab/vocabulary.json"),
-        out_json: Optional[Path] = Path("../out/joint_ids.json"),
+        out_json: Optional[Path] = Path("../out/ids.json"),
         drop_empty: bool = True,
-    ) -> List[List[List[int]]]:
+        keep_unk: bool = True,
+        min_len: int = 1,
+    ) -> List[List[int]]:
         from vocabulary import Vocabulary
 
         vocab = Vocabulary.load(vocab_path)
 
-        joint_ids = self.tokens_to_ids_joint(
+        ids = self.tokens_to_ids(
             token_sequences,
             vocab,
             drop_empty=drop_empty,
+            keep_unk=keep_unk,
+            min_len=min_len,
         )
 
         if out_json is not None:
             out_json.parent.mkdir(parents=True, exist_ok=True)
             with open(out_json, "w", encoding="utf-8") as f:
-                json.dump(joint_ids, f, indent=2)
+                json.dump(ids, f, indent=2)
 
-        return joint_ids
+        return ids
