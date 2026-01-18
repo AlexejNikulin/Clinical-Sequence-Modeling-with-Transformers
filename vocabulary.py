@@ -31,6 +31,8 @@ class TokenConverter:
         
         if(raw_event == "DEM"):
             return self.dem_to_token(row["event_value"])
+        elif(raw_event == "TIME"):
+            return self.time_to_token(row["event_value"]) 
         else:
             try:
                 event = int(raw_event)
@@ -67,12 +69,15 @@ class TokenConverter:
             return self.death_to_token()
  
         return None
- 
-    def dem_to_token(self, event_value: str) -> str:
-        return f"[{event_value}]"
 
     def adm_to_token(self, adm_type: str) -> str:
         return f"[ADM_{adm_type}]"
+    
+    def dem_to_token(self, event_value: str) -> str:
+        return f"[{event_value}]"
+    
+    def time_to_token(self, event_value: str) -> str:
+        return f"[{event_value}]"
  
     def readm_to_token(self, dis_type) -> str:
         return f"[READM_{dis_type}]"
@@ -105,8 +110,9 @@ class Vocabulary:
  
     Ranges:
       Special     : 0..4
-      Dem_gender  : 5..9
-      Dem_age     : 10..99999
+      Time        : 5..9
+      Dem_gender  : 10..99
+      Dem_age     : 100..99999
       Admission   : 100000..199999
       Diagnose    : 200000..299999
       Procedure   : 300000..399999
@@ -117,7 +123,8 @@ class Vocabulary:
     token_converter: TokenConverter = field(default_factory=TokenConverter)
  
     # token -> id maps
-    special_vocab: Dict[str, int] = field(default_factory=dict)
+    special_vocab: Dict[str, int] = field(default_factory=dict) 
+    time_vocab: Dict[str, int] = field(default_factory=dict) 
     dem_gen_vocab: Dict[str, int] = field(default_factory=dict)
     dem_age_vocab: Dict[str, int] = field(default_factory=dict)
     admission_vocab: Dict[str, int] = field(default_factory=dict)
@@ -134,8 +141,9 @@ class Vocabulary:
  
     # Next free IDs per block
     _next_special: int = 0
-    _next_dem_gen: int = 5
-    _next_dem_age: int = 10
+    _next_time: int = 5
+    _next_dem_gen: int = 10
+    _next_dem_age: int = 100
     _next_adm: int = 100000
     _next_diag: int = 200000
     _next_labev: int = 300000
@@ -150,6 +158,7 @@ class Vocabulary:
         self.token_converter = TokenConverter()
 
         self.special_vocab = {}
+        self.time_vocab = {}
         self.dem_gen_vocab = {}
         self.dem_age_vocab = {}
         self.admission_vocab = {}
@@ -168,6 +177,7 @@ class Vocabulary:
         path = Path(path)
         data = {
             "special": self.special_vocab,
+            "time": self.time_vocab,
             "demographic_gender": self.dem_gen_vocab,
             "demographic_age": self.dem_age_vocab,
             "admission": self.admission_vocab,
@@ -192,6 +202,7 @@ class Vocabulary:
         vocab.token_converter = TokenConverter()
 
         vocab.special_vocab = {}
+        vocab.time_vocab = {}
         vocab.dem_gen_vocab = {}
         vocab.dem_age_vocab = {}
         vocab.admission_vocab = {}
@@ -202,8 +213,9 @@ class Vocabulary:
         vocab.death_vocab = {}
 
         vocab._next_special = 0
-        vocab._next_dem_gen = 5
-        vocab._next_dem_age = 10
+        vocab._next_time = 5
+        vocab._next_dem_gen = 10
+        vocab._next_dem_age = 100
         vocab._next_adm = 100000
         vocab._next_diag = 200000
         vocab._next_labev = 300000
@@ -212,6 +224,7 @@ class Vocabulary:
         vocab._next_death = 600000
 
         vocab.special_vocab = data["special"]
+        vocab.time_vocab = data["time"]
         vocab.dem_gen_vocab = data["demographic_gender"]
         vocab.dem_age_vocab = data["demographic_age"]
         vocab.admission_vocab = data["admission"]
@@ -231,6 +244,7 @@ class Vocabulary:
             data = json.load(f)
 
         self.special_vocab = data["special"]
+        self.time_vocab = data["time"]
         self.dem_gen_vocab = data["demographic_gender"]
         self.dem_age_vocab = data["demographic_age"]
         self.admission_vocab = data["admission"]
@@ -290,18 +304,25 @@ class Vocabulary:
     def _add_token(self, vocab: Dict[str, int], token: str, event) -> None:
         if token in vocab:
             return
+        
+        if token.startswith("[TIME"):
+            new_id = self._next_time
+            if new_id > 9:
+                raise RuntimeError("Time vocab exceeded 5..10 range.")
+            vocab[token] = new_id
+            self._next_time += 1
  
         if token.startswith("[DEM_G"):
             new_id = self._next_dem_gen
-            if new_id > 10:
-                raise RuntimeError("Demographic gender vocab exceeded 5..10 range.")
+            if new_id > 99:
+                raise RuntimeError("Demographic gender vocab exceeded 10..99 range.")
             vocab[token] = new_id
             self._next_dem_gen += 1
 
         if token.startswith("[DEM_A"):
             new_id = self._next_dem_age
             if new_id > 99999:
-                raise RuntimeError("Demographic age vocab exceeded 10..99999 range.")
+                raise RuntimeError("Demographic age vocab exceeded 100..99999 range.")
             
             age_str = token.removeprefix("[DEM_AGE_")
             age_str = age_str.removesuffix("]")
@@ -363,6 +384,8 @@ class Vocabulary:
                 return self.dem_gen_vocab
             elif(raw_value.startswith("DEM_A")):
                 return self.dem_age_vocab
+        elif(raw_event == "TIME"):
+            return self.time_vocab
         else:
             try:
                 event = int(raw_event)
@@ -416,6 +439,8 @@ class Vocabulary:
         """
         if token in self.special_vocab:
             return self.special_vocab[token]
+        if token in self.time_vocab:
+            return self.time_vocab[token]
         if token in self.dem_gen_vocab:
             return self.dem_gen_vocab[token]
         if token in self.dem_age_vocab:
