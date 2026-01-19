@@ -63,6 +63,7 @@ import time
 import random
 from dataclasses import asdict
 from typing import Dict, Optional, List, Tuple
+import json
 
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -385,14 +386,18 @@ class Transformer:
             masked_ratio = n_masked / max(1, n_valid)
 
             if step % 10 == 0:
-                print(
-                    f"[step {step:4d}] "
-                    f"loss={loss.item():.4f} "
-                    f"grad_norm={grad_norm:.3f} "
-                    f"logits_max={logits_max:.3f} "
-                    f"n_masked={n_masked} "
-                    f"masked_ratio={masked_ratio:.3f}"
-                )
+                log_row = {
+                    "step": f"{step:4d}",
+                    "loss": f"{loss.item():.4f}",
+                    "grad_norm": f"{grad_norm:.3f}",
+                    "logits_max": f"{logits_max:.3f}",
+                    "n_masked": f"{n_masked:4d}",
+                    "masked_ratio": f"{masked_ratio:.3f}",
+                }
+
+                print(json.dumps(log_row))
+                with open(log_path, "a", newline="") as f:
+                    csv.DictWriter(f, fieldnames=fieldnames).writerow(log_row)
 
             step += 1
 
@@ -414,8 +419,6 @@ class Transformer:
 
 
     def main(self, sequences) -> None:
-        vocab_size = 70000
-
         # class MiniVocab:
         #     def get_padding_token(self): return "[PAD]"
         #     def get_masking_token(self): return "[MASK]"
@@ -427,6 +430,7 @@ class Transformer:
 
         VOCAB_PATH = Path("../out/vocab/vocabulary.json")
         vocab = Vocabulary.load(VOCAB_PATH)
+        vocab_size = vocab.get_size()
 
         cfg = CompactTransformerConfig(
             vocab_size=vocab_size,
@@ -454,8 +458,8 @@ class Transformer:
             attention_mask=attn,
             segment_ids=seg,
             cfg=cfg,
-            steps=300,
-            batch_size=16,
+            steps=1000,
+            batch_size=32,
             lr=3e-4,
             p_mlm=0.15,
         )

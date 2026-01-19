@@ -3,6 +3,7 @@
 import pandas as pd
 import re
 from pathlib import Path
+from tqdm import tqdm
 
 class PatientLevelEventExtractor:
     def __init__(self):
@@ -196,7 +197,6 @@ class PatientLevelEventExtractor:
         lookup_dict = meds_detail["result"].to_dict()
         del meds_detail
 
-        # NOTE: assumes column name is 'medication' in your emar.csv
         meds = pd.read_csv(self.EMAR_CSV, usecols=["subject_id", "emar_id", "charttime", "medication"])
         meds["charttime"] = self.to_dt(meds["charttime"])
         meds = meds.dropna(subset=["charttime"])
@@ -205,7 +205,7 @@ class PatientLevelEventExtractor:
         meds["event_value"] = meds["medication"].map(lambda m: f"{self.sanitize_token(m)}")
         meds["result"]      = ""
 
-        for index, row in meds.iterrows():
+        for index, row in tqdm(meds.iterrows(), total=meds.shape[0]):
             meds.at[index, "result"] = lookup_dict.get(row["emar_id"], "")
 
         med_events = meds.rename(columns={"charttime": "timestamp"})[["subject_id", "timestamp", "event_type", "event_value", "result"]]

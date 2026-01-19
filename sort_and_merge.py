@@ -5,8 +5,6 @@ import os
 class SortMerger:
     def __init__(self):
         # FOR DEBUGGING
-        self.MAX_ROWS_PER_FILE = 1000
-
         self.ADMISSION_CSV = "../out/extract_patient_level_events/events_dynamic_admissions.csv"
         self.DIAGNOSES_CSV = "../out/extract_patient_level_events/events_dynamic_diagnoses_icd.csv"
         self.DISCHARGES_CSV = "../out/extract_patient_level_events/events_dynamic_discharges.csv"
@@ -52,19 +50,10 @@ class SortMerger:
         })
 
     def write_patient_events_for_file(self, file, subject_ids_with_file):
-        print(f"Starting to process file (max {self.MAX_ROWS_PER_FILE} rows): {file}")
-        rows_seen = 0
+        print(f"Starting to process file: {file}")
 
         with pd.read_csv(file, chunksize=1_000_000) as reader:
             for i, chunk in enumerate(reader):
-                remaining = self.MAX_ROWS_PER_FILE - rows_seen
-                if remaining <= 0:
-                    break
-
-                if len(chunk) > remaining:
-                    chunk = chunk.iloc[:remaining]
-
-                rows_seen += len(chunk)
 
                 local_subject_ids = chunk["subject_id"].unique()
 
@@ -85,7 +74,7 @@ class SortMerger:
                     subject_ids_with_file.add(subject_id)
 
     def sort_and_merge(self):
-        admissions_df = pd.read_csv(self.ADMISSION_CSV, nrows=self.MAX_ROWS_PER_FILE)
+        admissions_df = pd.read_csv(self.ADMISSION_CSV)
         subject_ids = admissions_df["subject_id"].unique()
 
         subject_ids_with_file = set()

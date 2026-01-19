@@ -1,7 +1,7 @@
 import json
 from typing import List, Any, Optional
 from pathlib import Path
-
+from tqdm import tqdm
 
 class TokenSequencer:
     """
@@ -29,44 +29,47 @@ class TokenSequencer:
 
     def tokens_to_ids(
         self,
-        token_sequences: List[List[Any]],
+        token_sequences: List[List[List[str]]],
         vocab,
         *,
         drop_empty: bool = True,
         keep_unk: bool = True,
         min_len: int = 1,
-    ) -> List[List[int]]:
+    ) -> List[List[List[int]]]:
         pad_id = vocab.token_to_id(vocab.get_padding_token())
         unk_id = vocab.token_to_id(vocab.get_unknown_token())
 
         all_ids: List[List[int]] = []
 
-        for i, seq in enumerate(token_sequences):
+        for i, seq in tqdm(enumerate(token_sequences), total=len(token_sequences)):
             if not isinstance(seq, list):
                 raise ValueError(
                     f"Invalid patient entry at index {i}. Expected a list of tokens, got: {type(seq)}"
                 )
 
-            ids: List[int] = []
+            ids: List[List[int]] = []
 
-            for tok in seq:
-                if tok is None:
-                    continue
-                s = str(tok).strip()
-                if s == "":
-                    continue
+            for data_type in seq: # demographic vs. non-demographic data
+                local_ids: List[int] = []
+                for tok in data_type:
+                    if tok is None:
+                        continue
+                    s = str(tok).strip()
+                    if s == "":
+                        continue
 
-                tid = vocab.token_to_id(s)
+                    tid = vocab.token_to_id(s)
 
-                # optionally drop unknowns
-                if tid == unk_id and not keep_unk:
-                    continue
+                    # optionally drop unknowns
+                    if tid == unk_id and not keep_unk:
+                        continue
 
-                # never carry PAD from upstream
-                if tid == pad_id:
-                    continue
+                    # never carry PAD from upstream
+                    if tid == pad_id:
+                        continue
 
-                ids.append(tid)
+                    local_ids.append(tid)
+                ids.append(local_ids)
 
             if drop_empty:
                 if len(ids) < min_len:
@@ -78,7 +81,7 @@ class TokenSequencer:
 
     def build_sequences(
         self,
-        token_sequences: List[List[Any]],
+        token_sequences: List[List[List[str]]],
         *,
         vocab_path: Path = Path("../out/vocab/vocabulary.json"),
         out_json: Optional[Path] = Path("../out/ids.json"),
@@ -104,3 +107,7 @@ class TokenSequencer:
                 json.dump(ids, f, indent=2)
 
         return ids
+
+    def load_ids_from_json(self, path: Path = Path("../out/ids.json")):
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)

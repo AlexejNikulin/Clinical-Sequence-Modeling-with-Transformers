@@ -106,19 +106,7 @@ class TokenConverter:
 @dataclass
 class Vocabulary:
     """
-    One global special-vocabulary + per-event vocabularies in 10k blocks.
- 
-    Ranges:
-      Special     : 0..4
-      Time        : 5..9
-      Dem_gender  : 10..99
-      Dem_age     : 100..99999
-      Admission   : 100000..199999
-      Diagnose    : 200000..299999
-      Procedure   : 300000..399999
-      Medication  : 400000..499999
-      Readmission : 500000..599999
-      Death       : 600000..699999
+    One global special-vocabulary + per-event vocabularies in blocks by event type.
     """
     token_converter: TokenConverter = field(default_factory=TokenConverter)
  
@@ -138,18 +126,30 @@ class Vocabulary:
     PAD: str = "[PAD]"
     MASK: str = "[MASK]"
     UNK: str = "[UNK]"
+
+    # Start IDs per block
+    START_SPECIAL: int = 0
+    START_TIME: int = 5
+    START_DEM_GEN: int = 10
+    START_DEM_AGE: int = 18
+    START_ADM: int = 100
+    START_DIAG: int = 110
+    START_LABEV: int = 27000
+    START_MED: int = 29000
+    START_READM: int = 56000
+    START_DEATH: int = 56010
  
     # Next free IDs per block
-    _next_special: int = 0
-    _next_time: int = 5
-    _next_dem_gen: int = 10
-    _next_dem_age: int = 100
-    _next_adm: int = 100000
-    _next_diag: int = 200000
-    _next_labev: int = 300000
-    _next_med: int = 400000
-    _next_readm: int = 500000
-    _next_death: int = 600000
+    _next_special: int = START_SPECIAL
+    _next_time: int = START_TIME
+    _next_dem_gen: int = START_DEM_GEN
+    _next_dem_age: int = START_DEM_AGE
+    _next_adm: int = START_ADM
+    _next_diag: int = START_DIAG
+    _next_labev: int = START_LABEV
+    _next_med: int = START_MED
+    _next_readm: int = START_READM
+    _next_death: int = START_DEATH
  
     def __init__(self, df = None):
         self.VOCAB_PATH = Path("../out/vocab/vocabulary.json")
@@ -212,16 +212,16 @@ class Vocabulary:
         vocab.readmission_vocab = {}
         vocab.death_vocab = {}
 
-        vocab._next_special = 0
-        vocab._next_time = 5
-        vocab._next_dem_gen = 10
-        vocab._next_dem_age = 100
-        vocab._next_adm = 100000
-        vocab._next_diag = 200000
-        vocab._next_labev = 300000
-        vocab._next_med = 400000
-        vocab._next_readm = 500000
-        vocab._next_death = 600000
+        vocab._next_special = cls.START_SPECIAL
+        vocab._next_time = cls.START_TIME
+        vocab._next_dem_gen = cls.START_DEM_GEN
+        vocab._next_dem_age = cls.START_DEM_AGE
+        vocab._next_adm = cls.START_ADM
+        vocab._next_diag = cls.START_DIAG
+        vocab._next_labev = cls.START_LABEV
+        vocab._next_med = cls.START_MED
+        vocab._next_readm = cls.START_READM
+        vocab._next_death = cls.START_DEATH
 
         vocab.special_vocab = data["special"]
         vocab.time_vocab = data["time"]
@@ -307,22 +307,22 @@ class Vocabulary:
         
         if token.startswith("[TIME"):
             new_id = self._next_time
-            if new_id > 9:
-                raise RuntimeError("Time vocab exceeded 5..10 range.")
+            if new_id >= self.START_DEM_GEN:
+                raise RuntimeError("Time vocab exceeded allowed range.")
             vocab[token] = new_id
             self._next_time += 1
  
         if token.startswith("[DEM_G"):
             new_id = self._next_dem_gen
-            if new_id > 99:
-                raise RuntimeError("Demographic gender vocab exceeded 10..99 range.")
+            if new_id >= self.START_DEM_AGE:
+                raise RuntimeError("Demographic gender vocab exceeded allowed range.")
             vocab[token] = new_id
             self._next_dem_gen += 1
 
         if token.startswith("[DEM_A"):
             new_id = self._next_dem_age
-            if new_id > 99999:
-                raise RuntimeError("Demographic age vocab exceeded 100..99999 range.")
+            if new_id >= self.START_ADM:
+                raise RuntimeError("Demographic age vocab exceeded allowed range.")
             
             age_str = token.removeprefix("[DEM_AGE_")
             age_str = age_str.removesuffix("]")
@@ -335,43 +335,43 @@ class Vocabulary:
 
         if event == EventType.ADMISSION:
             new_id = self._next_adm
-            if new_id > 199999:
-                raise RuntimeError("Admission vocab exceeded 100000..199999 range.")
+            if new_id >= self.START_DIAG:
+                raise RuntimeError("Admission vocab exceeded allowed range.")
             vocab[token] = new_id
             self._next_adm += 1
  
         elif event == EventType.DIAGNOSE:
             new_id = self._next_diag
-            if new_id > 299999:
-                raise RuntimeError("Diagnosis vocab exceeded 200000..299999 range.")
+            if new_id >= self.START_LABEV:
+                raise RuntimeError("Diagnosis vocab exceeded allowed range.")
             vocab[token] = new_id
             self._next_diag += 1
  
         elif event == EventType.LABEVENTS:
             new_id = self._next_labev
-            if new_id > 399999:
-                raise RuntimeError("Labevents vocab exceeded 300000..399999 range.")
+            if new_id >= self.START_MED:
+                raise RuntimeError("Labevents vocab exceeded allowed range.")
             vocab[token] = new_id
             self._next_labev += 1
  
         elif event == EventType.MEDICATION:
             new_id = self._next_med
-            if new_id > 499999:
-                raise RuntimeError("Medication vocab exceeded 400000..499999 range.")
+            if new_id >= self.START_READM:
+                raise RuntimeError("Medication vocab exceeded allowed range.")
             vocab[token] = new_id
             self._next_med += 1
  
         elif event == EventType.DISCHARGE:
             new_id = self._next_readm
-            if new_id > 599999:
-                raise RuntimeError("Readmission vocab exceeded 500000..599999 range.")
+            if new_id >= self.START_DEATH:
+                raise RuntimeError("Readmission vocab exceeded allowed range.")
             vocab[token] = new_id
             self._next_readm += 1
  
         elif event == EventType.DEATH:
             new_id = self._next_death
-            if new_id > 699999:
-                raise RuntimeError("Death vocab exceeded 600000..699999 range.")
+            # if new_id > 699999:
+            #     raise RuntimeError("Death vocab exceeded allowed range.")
             vocab[token] = new_id
             self._next_death += 1
  
@@ -468,6 +468,9 @@ class Vocabulary:
    
     def get_masking_token(self) -> str:
         return self.MASK
+    
+    def get_size(self) -> int:
+        return self.death_vocab["[DEATH]"] + 1
  
  #-----------MAIN CODE--------------
     def build_vocabulary(self):    

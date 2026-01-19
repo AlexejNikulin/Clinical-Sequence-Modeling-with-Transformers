@@ -13,6 +13,7 @@ from IPython.display import Image
 from pathlib import Path
 
 from vocabulary import Vocabulary
+from tqdm import tqdm
 
 class EventSequencer():
     def __init__(self):
@@ -31,7 +32,7 @@ class EventSequencer():
     def build_patient_event_sequences(
         self,
         df: pd.DataFrame,
-    ) -> List[List[str]]:
+    ) -> List[List[List[str]]]:
         """
         Convert an event table into time-ordered event sequences per patient.
 
@@ -53,10 +54,10 @@ class EventSequencer():
 
         sequences = []
 
-        df = df.copy()
+        # df = df.copy()
         df["timestamp"] = pd.to_datetime(df["timestamp"])
 
-        for subject_id, group in df.groupby("subject_id"):
+        for subject_id, group in tqdm(df.groupby("subject_id")):
             patient_sequences = [[], []]
 
             previous_timestamp = None
