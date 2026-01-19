@@ -5,40 +5,47 @@ from vocabulary import Vocabulary
 from build_patient_event_sequences import EventSequencer
 from tokenize_sequences import TokenSequencer
 from pathlib import Path
-from transformer.transformer_train_model import Transformer
 import pandas as pd
+import json
 
-# # 1 - Extract_patient_level_events 
-# patientLevelEventExtractor = PatientLevelEventExtractor()
-# patientLevelEventExtractor.start_extraction()
+def main():
 
-# # 2 - Sort_and_merge
-# sortMerger = SortMerger()
-# sortMerger.sort_and_merge()
+    # 1) Extract patient-level events
+    # extractor = PatientLevelEventExtractor()
+    # extractor.start_extraction()
 
-# # 3 - Split_combined 
-# dataSplitter = DataSplitter()
-# dataSplitter.split_dataset() 
+    # 2) Sort and merge events
+    # sort_merger = SortMerger()
+    # sort_merger.sort_and_merge()
 
-# # 4 - Vocabulary
-# vocabulary = Vocabulary()
-# vocabulary.build_vocabulary()
+    # 3) Train/val/test split
+    # splitter = DataSplitter()
+    # splitter.split_dataset()
 
-# # 5 - Build_patient_event_sequences
-# COMBINED_CSV = Path("../out/splits_out/combined_train.csv")
-# df = pd.read_csv(COMBINED_CSV)
+    # 4) Build vocabulary
+    # vocab = Vocabulary()
+    # vocab.build_vocabulary()
 
-# eventSequencer = EventSequencer() 
-# sequences = eventSequencer.build_patient_event_sequences(df)
+    # 5) Build patient event sequences
+    COMBINED_CSV = Path("out/splits_out/combined_train.csv")
+    df = pd.read_csv(COMBINED_CSV)
 
-# # 6 - tokenize_sequences
-# sequences = [
-#     ["[DEM_GENDER_F]", "[DEM_AGE_19]", "[ADM_EU OBSERVATION]", "[LAB_CREATININE]", "[MED_ATORVASTATIN]", "[READM_EU OBSERVATION]"],
-#     ["[DEM_GENDER_M]", "[DEM_AGE_59]", "[ADM_OBSERVATION ADMIT]", "[DIAG9_5715]", "[DEATH]"]
-# ]
-# tokenSequencer = TokenSequencer()
-# ids = tokenSequencer.build_sequences(sequences)
+    event_sequencer = EventSequencer()
+    sequences = event_sequencer.build_patient_event_sequences(df)
 
-# # 7 - Train transformer
-# transformer = Transformer()
-# transformer.main(ids)
+    # 6) Tokenize sequences
+    token_sequencer = TokenSequencer()
+    ids = token_sequencer.build_sequences(sequences)
+
+    # 7) Save tokenized sequences for training
+    out_dir = Path("out/sequences")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    out_path = out_dir / "ids.json"
+    with open(out_path, "w") as f:
+        json.dump(ids, f)
+
+    print(f"Saved tokenized sequences to {out_path}")
+
+if __name__ == "__main__":
+    main()

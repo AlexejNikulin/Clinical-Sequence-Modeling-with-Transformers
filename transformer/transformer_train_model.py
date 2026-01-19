@@ -1,82 +1,57 @@
 # transformer/transformer_train_model.py
 """
-Transformer training script (MLM) for CompactTransformerEncoder
-supporting the EXACT nested input format:
+Transformer training script (MLM) for CompactTransformerEncoder.
 
+Supported input format (EXACT):
 [
-  [[demo_tokens], [event_tokens]],
-  [[demo_tokens], [event_tokens]],
+  [[demo_token_ids], [event_token_ids]],
+  [[demo_token_ids], [event_token_ids]],
   ...
 ]
 
-Example:
-[
-  [[0, 2, 5], [0, 55555, 32578, 12358, 1]],
-  [[1, 4, 6], [0, 47856, 21471, 1, 0, 25868, 1]],
-]
+Recommended run (IMPORTANT)
+--------------------------
+From repo root (preferred):
+  python3 -m transformer.transformer_train_model
 
-What this script does
----------------------
-1) Converts the nested input into model-ready tensors:
-     input_ids      : [N, max_len]
-     attention_mask : [N, max_len]
-     segment_ids    : [N, max_len]
-        0 = demographic tokens
-        1 = event tokens
-
-2) Segment embeddings (DEFAULT: ON)
-   - segment_ids are passed as event_type_ids to the encoder
-   - cfg.use_event_type_embeddings = True by default
-   - cfg.n_event_types = 2 (demo vs events)
-   - Can be disabled with: --no_event_types
-
-3) MLM masking (BERT-style 80/10/10)
-   - Default: mask ONLY event tokens (segment == 1)
-   - Demographic tokens are never masked
-   - Optional: --mask_demo also masks demographic tokens
-
-4) Logging
-   - Console + CSV logging
-   - Metrics: loss, grad_norm, logits_max, n_masked, masked_ratio
-
-Recommended runs
-----------------
-1) Standard synthetic run (segment embeddings ON):
-   cd transformer
-   python transformer_train_model.py
-
-2) Slack dummy example (only 2 patients → reduce batch size):
-   cd transformer
-   python transformer_train_model.py --use_slack_dummy --batch_size 2 --steps 200
-
-3) Disable segment embeddings (ablation):
-   python transformer_train_model.py --no_event_types
+Or from transformer/ folder:
+  cd transformer
+  python3 transformer_train_model.py
 """
 
 from __future__ import annotations
 
 import os
 import csv
+import json
 import math
-from pathlib import Path
 import time
 import random
+from pathlib import Path
 from dataclasses import asdict
 from typing import Dict, Optional, List, Tuple
 
 import torch
 from torch.utils.data import Dataset, DataLoader
 
-# Local imports
-from vocabulary import Vocabulary
+# -------------------------------------------------
+# Robust imports (works from repo root AND from transformer/)
+# -------------------------------------------------
+try:
+    # when executed as module: python -m transformer.transformer_train_model
+    from vocabulary import Vocabulary
+except ModuleNotFoundError:
+    # when executed directly: cd transformer && python transformer_train_model.py
+    from ..vocabulary import Vocabulary  # type: ignore
+
 from mlm_masking import mlm_mask_801010
 from compact_transformer_encoder import CompactTransformerConfig, CompactTransformerEncoder
+
 
 # =================================================
 # Reproducibility
 # =================================================
 def set_seed(seed: int = 0) -> None:
-    """Set RNG seeds for reproducible debug runs."""
     random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
@@ -84,14 +59,39 @@ def set_seed(seed: int = 0) -> None:
 
 
 # =================================================
+# Änderung 1: Loader für ids.json hinzufügen (oben)
+# =================================================
+def load_joint_sequences_from_ids(path: Path) -> List[List[List[int]]]:
+    """
+    Load pre-tokenized sequences from ids.json.
+
+    Expected:
+    [
+      [[demo_ids], [event_ids]],
+      ...
+    ]
+    """
+    if not path.exists():
+        raise FileNotFoundError(f"ids.json not found: {path}")
+
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    if not isinstance(data, list):
+        raise ValueError("ids.json must contain a list")
+
+    # minimal structure validation (first few)
+    for i, item in enumerate(data[:5]):
+        if not isinstance(item, list) or len(item) != 2:
+            raise ValueError(f"Invalid sequence at index {i}: expected [[demo],[events]]")
+
+    return data
+
+
+# =================================================
 # Helpers: nested joint format -> flat tensors
 # =================================================
 def _get_optional_sep_id(vocab) -> Optional[int]:
-    """
-    Optional support for a [SEP] token.
-    If the vocab exposes get_separator_token() or get_sep_token(),
-    it will be inserted between demographics and events.
-    """
     if hasattr(vocab, "get_separator_token"):
         return vocab.token_to_id(vocab.get_separator_token())
     if hasattr(vocab, "get_sep_token"):
@@ -107,43 +107,36 @@ def build_joint_sequences(
     pad_id: int,
     sep_id: Optional[int] = None,
 ) -> Tuple[List[List[int]], List[List[int]], List[List[int]]]:
-    """
-    Build flat sequences by concatenating:
-      demographics (+ optional SEP) + events + PAD
-
-    Returns:
-      input_ids      : [N, max_len]
-      attention_mask : [N, max_len]
-      segment_ids    : [N, max_len]
-    """
     if len(demographics) != len(events):
         raise ValueError("demographics/events length mismatch")
 
     input_ids_all, attn_all, seg_all = [], [], []
 
     for demo_tok, event_tok in zip(demographics, events):
-        seq, seg = [], []
+        seq: List[int] = []
+        seg: List[int] = []
 
-        # Demographics block
+        # demo block
         seq.extend(demo_tok)
         seg.extend([0] * len(demo_tok))
 
-        # Optional separator
+        # optional separator (still demo segment)
         if sep_id is not None:
             seq.append(sep_id)
             seg.append(0)
 
-        # Events block
+        # events block
         seq.extend(event_tok)
         seg.extend([1] * len(event_tok))
 
-        # Clip
+        # clip
         seq = seq[:max_len]
         seg = seg[:max_len]
 
+        # attention mask
         attn = [0 if tok == pad_id else 1 for tok in seq]
 
-        # Pad
+        # pad
         while len(seq) < max_len:
             seq.append(pad_id)
             attn.append(0)
@@ -163,14 +156,6 @@ def build_from_joint_format(
     pad_id: int,
     sep_id: Optional[int] = None,
 ) -> Tuple[List[List[int]], List[List[int]], List[List[int]]]:
-    """
-    Converts EXACT format:
-      [
-        [[demo_tokens], [event_tokens]],
-        ...
-      ]
-    into model-ready tensors.
-    """
     demographics, events = [], []
 
     for i, item in enumerate(joint_data):
@@ -193,11 +178,6 @@ def build_from_joint_format(
 # Dataset / DataLoader
 # =================================================
 class SequenceDataset(Dataset):
-    """
-    Dataset holding already-built model sequences.
-    segment_ids are passed as event_type_ids.
-    """
-
     def __init__(
         self,
         input_ids: List[List[int]],
@@ -230,10 +210,11 @@ def make_dataloader(
     ds = SequenceDataset(input_ids, attention_mask, segment_ids)
     return DataLoader(ds, batch_size=batch_size, shuffle=True, drop_last=True)
 
-class Transformer:
-    # =================================================
-    # MLM batch preparation
-    # =================================================
+
+# =================================================
+# Trainer
+# =================================================
+class TransformerTrainer:
     def make_mlm_batch(
         self,
         batch: Dict[str, torch.Tensor],
@@ -244,10 +225,6 @@ class Transformer:
         device: torch.device,
         mask_demo: bool = False,
     ) -> Dict[str, torch.Tensor]:
-        """
-        Apply MLM masking.
-        Default: mask ONLY event tokens (segment==1).
-        """
         input_ids = batch["input_ids"].to(device)
         attention_mask = batch["attention_mask"].to(device)
 
@@ -258,10 +235,11 @@ class Transformer:
         effective_mask = attention_mask
         seg = batch.get("event_type_ids")
 
+        # default: do NOT mask demo tokens
         if seg is not None and not mask_demo:
             seg = seg.to(device)
             effective_mask = attention_mask.clone()
-            effective_mask[seg == 0] = 0  # never mask demographics
+            effective_mask[seg == 0] = 0
 
         masked_input_ids, labels = mlm_mask_801010(
             input_ids=input_ids,
@@ -280,13 +258,8 @@ class Transformer:
         }
         if seg is not None:
             out["event_type_ids"] = seg
-
         return out
 
-
-    # =================================================
-    # Training utilities
-    # =================================================
     def global_grad_norm(self, model: torch.nn.Module) -> float:
         total = 0.0
         for p in model.parameters():
@@ -294,27 +267,21 @@ class Transformer:
                 total += (p.grad.data.norm(2).item() ** 2)
         return math.sqrt(total)
 
-
     def ensure_dir(self, path: str) -> None:
         os.makedirs(path, exist_ok=True)
-
 
     def make_run_log_path(self, base_dir: str = "logs", prefix: str = "train_log") -> str:
         self.ensure_dir(base_dir)
         stamp = time.strftime("%Y%m%d_%H%M%S")
         return os.path.join(base_dir, f"{prefix}_{stamp}.csv")
 
-
-    # =================================================
-    # Training loop
-    # =================================================
     def train_mlm(
         self,
         *,
         vocab,
-        input_ids,
-        attention_mask,
-        segment_ids,
+        input_ids: List[List[int]],
+        attention_mask: List[List[int]],
+        segment_ids: Optional[List[List[int]]],
         cfg: CompactTransformerConfig,
         steps: int,
         batch_size: int,
@@ -322,9 +289,9 @@ class Transformer:
         p_mlm: float,
         seed: int = 0,
         mask_demo: bool = False,
+        log_every: int = 10,
     ) -> None:
         set_seed(seed)
-
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         loader = make_dataloader(
@@ -350,10 +317,9 @@ class Transformer:
         print(f"log_path={log_path}")
         print("=======================\n")
 
-        step = 0
         data_iter = iter(loader)
 
-        while step < steps:
+        for step in range(steps):
             try:
                 batch = next(data_iter)
             except StopIteration:
@@ -371,6 +337,7 @@ class Transformer:
 
             optimizer.zero_grad(set_to_none=True)
             out = model(**mlm_batch)
+
             loss = out["loss"]
             loss.backward()
 
@@ -384,7 +351,7 @@ class Transformer:
             n_valid = (mlm_batch["attention_mask"] == 1).sum().item()
             masked_ratio = n_masked / max(1, n_valid)
 
-            if step % 10 == 0:
+            if step % log_every == 0:
                 print(
                     f"[step {step:4d}] "
                     f"loss={loss.item():.4f} "
@@ -394,68 +361,93 @@ class Transformer:
                     f"masked_ratio={masked_ratio:.3f}"
                 )
 
-            step += 1
+                with open(log_path, "a", newline="") as f:
+                    csv.DictWriter(f, fieldnames=fieldnames).writerow(
+                        {
+                            "step": step,
+                            "loss": float(loss.item()),
+                            "grad_norm": float(grad_norm),
+                            "logits_max": float(logits_max),
+                            "n_masked": int(n_masked),
+                            "masked_ratio": float(masked_ratio),
+                        }
+                    )
 
         print("\nTraining finished.")
         print(f"Logs written to {log_path}")
 
 
-    # =================================================
-    # Dummy data + main
-    # =================================================
-    def make_synth_joint_nested(self, n_seq: int, vocab_size: int) -> List[List[List[int]]]:
-        rng = random.Random(0)
-        joint = []
-        for _ in range(n_seq):
-            demo = [rng.randint(3, 200) for _ in range(3)]
-            ev = [rng.randint(3, vocab_size - 1) for _ in range(rng.randint(10, 60))]
-            joint.append([demo, ev])
-        return joint
+# =================================================
+# Änderung 2: main() minimal anpassen
+# =================================================
+def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--steps", type=int, default=300)
+    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--max_len", type=int, default=256)
+    parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--p_mlm", type=float, default=0.15)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--mask_demo", action="store_true")
+    parser.add_argument("--no_event_types", action="store_true")
+
+    # IMPORTANT: defaults relative to repo root
+    parser.add_argument("--ids_path", type=str, default="out/ids/ids.json")
+    parser.add_argument("--vocab_path", type=str, default="out/vocab/vocabulary.json")
+    args = parser.parse_args()
+
+    # Resolve robustly (works from repo root OR transformer/)
+    repo_root = Path(__file__).resolve().parents[1]
+    ids_path = (Path(args.ids_path) if Path(args.ids_path).is_absolute() else repo_root / args.ids_path).resolve()
+    vocab_path = (Path(args.vocab_path) if Path(args.vocab_path).is_absolute() else repo_root / args.vocab_path).resolve()
+
+    # Load Vocabulary
+    vocab = Vocabulary.load(vocab_path)
+
+    pad_id = vocab.token_to_id(vocab.get_padding_token())
+    mask_id = vocab.token_to_id(vocab.get_masking_token())
+    sep_id = _get_optional_sep_id(vocab)
+
+    # Load ids.json sequences
+    joint_sequences = load_joint_sequences_from_ids(ids_path)
+
+    cfg = CompactTransformerConfig(
+        vocab_size=70000,
+        max_len=args.max_len,
+        d_model=192,
+        n_layers=3,
+        n_heads=6,
+        use_event_type_embeddings=(not args.no_event_types),
+        n_event_types=2,
+        pad_token_id=pad_id,
+        mask_token_id=mask_id,
+    )
+
+    input_ids, attention_mask, segment_ids = build_from_joint_format(
+        joint_data=joint_sequences,
+        max_len=cfg.max_len,
+        pad_id=cfg.pad_token_id,
+        sep_id=sep_id,
+    )
+
+    trainer = TransformerTrainer()
+    trainer.train_mlm(
+        vocab=vocab,
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        segment_ids=segment_ids,
+        cfg=cfg,
+        steps=args.steps,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        p_mlm=args.p_mlm,
+        seed=args.seed,
+        mask_demo=args.mask_demo,
+        log_every=10,
+    )
 
 
-    def main(self, sequences) -> None:
-        vocab_size = 70000
-
-        # class MiniVocab:
-        #     def get_padding_token(self): return "[PAD]"
-        #     def get_masking_token(self): return "[MASK]"
-        #     def get_unknown_token(self): return "[UNK]"
-        #     def token_to_id(self, tok: str) -> int:
-        #         return {"[PAD]": 0, "[MASK]": 1, "[UNK]": 2}[tok]
-
-        # vocab = MiniVocab()
-
-        VOCAB_PATH = Path("../out/vocab/vocabulary.json")
-        vocab = Vocabulary.load(VOCAB_PATH)
-
-        cfg = CompactTransformerConfig(
-            vocab_size=vocab_size,
-            max_len=256,
-            d_model=192,
-            n_layers=3,
-            n_heads=6,
-            use_event_type_embeddings=True,
-            n_event_types=2,
-            pad_token_id=0,
-            mask_token_id=1,
-        )
-
-        #joint = make_synth_joint_nested(800, vocab_size)
-
-        input_ids, attn, seg = build_from_joint_format(
-            joint_data=sequences,
-            max_len=cfg.max_len,
-            pad_id=cfg.pad_token_id,
-        )
-
-        self.train_mlm(
-            vocab=vocab,
-            input_ids=input_ids,
-            attention_mask=attn,
-            segment_ids=seg,
-            cfg=cfg,
-            steps=300,
-            batch_size=16,
-            lr=3e-4,
-            p_mlm=0.15,
-        )
+if __name__ == "__main__":
+    main()
