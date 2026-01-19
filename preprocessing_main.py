@@ -27,22 +27,13 @@ def main():
     # vocab.build_vocabulary()
 
     # 5) Build patient event sequences
-    # COMBINED_CSV = Path("../out/splits_out/combined_train.csv")
-    # df = pd.read_csv(COMBINED_CSV)
+    COMBINED_CSV = Path("../out/splits_out/combined_train.csv")
+    df = pd.read_csv(COMBINED_CSV)
 
-    # event_sequencer = EventSequencer()
-    # sequences = event_sequencer.build_patient_event_sequences(df)
+    event_sequencer = EventSequencer()
+    sequences = event_sequencer.build_patient_event_sequences(df)
 
     # 6) Tokenize sequences
-    sequences = []
-    # load sequences from the file
-    with open("../out/sequences/sequences_train.txt", "r") as infile:
-        for line in infile.readlines():
-            line = line.strip()
-            splitpos = line.index("-")
-            dem, seq = line[:splitpos], line[1+splitpos:]
-            dem, seq = dem.split(","), seq.split(",")
-            sequences.append([dem, seq])
     token_sequencer = TokenSequencer()
     ids = token_sequencer.build_sequences(sequences)
 
