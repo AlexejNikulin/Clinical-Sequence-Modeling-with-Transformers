@@ -5,56 +5,56 @@ from vocabulary import Vocabulary
 from build_patient_event_sequences import EventSequencer
 from tokenize_sequences import TokenSequencer
 from pathlib import Path
-from transformer.transformer_train_model import Transformer
 import pandas as pd
-from tqdm import tqdm
-import os
+import json
 
-# 1 - Extract_patient_level_events 
-patientLevelEventExtractor = PatientLevelEventExtractor()
-patientLevelEventExtractor.start_extraction()
+def main():
 
-# 2 - Sort_and_merge
-sortMerger = SortMerger()
-sortMerger.sort_and_merge()
+    # 1) Extract patient-level events
+    # extractor = PatientLevelEventExtractor()
+    # extractor.start_extraction()
 
-# 3 - Split_combined 
-dataSplitter = DataSplitter()
-dataSplitter.split_dataset() 
+    # 2) Sort and merge events
+    # sort_merger = SortMerger()
+    # sort_merger.sort_and_merge()
 
-# 4 - Vocabulary
-vocabulary = Vocabulary()
-vocabulary.build_vocabulary()
+    # 3) Train/val/test split
+    # splitter = DataSplitter()
+    # splitter.split_dataset()
 
-# 5 - Build_patient_event_sequences
-COMBINED_CSV = Path("../out/splits_out/combined_train.csv")
-df = pd.read_csv(COMBINED_CSV)
+    # 4) Build vocabulary
+    # vocab = Vocabulary()
+    # vocab.build_vocabulary()
 
-os.makedirs("../out/sequences", exist_ok=True)
-eventSequencer = EventSequencer() 
-sequences = eventSequencer.build_patient_event_sequences(df)
-# write sequences to a file
-with open("../out/sequences/sequences_train.txt", "w") as outfile: 
-    for sequence in tqdm(sequences):
-        dem, seq = sequence[0], sequence[1]
-        outfile.write(",".join(dem) + "-" + ",".join(seq) + "\n")
+    # 5) Build patient event sequences
+    # COMBINED_CSV = Path("../out/splits_out/combined_train.csv")
+    # df = pd.read_csv(COMBINED_CSV)
 
-# 6 - tokenize_sequences
-sequences = []
-# load sequences from the file
-with open("../out/sequences/sequences_train.txt", "r") as infile:
-    for line in tqdm(infile.readlines()):
-        line = line.strip()
-        splitpos = line.index("-")
-        dem, seq = line[:splitpos], line[1+splitpos:]
-        dem, seq = dem.split(","), seq.split(",")
-        sequences.append([dem, seq])
-# build id sequences
-tokenSequencer = TokenSequencer()
-ids = tokenSequencer.build_sequences(sequences)
+    # event_sequencer = EventSequencer()
+    # sequences = event_sequencer.build_patient_event_sequences(df)
 
-# 7 - Train transformer
-tokenSequencer = TokenSequencer()
-ids = tokenSequencer.load_ids_from_json()
-transformer = Transformer()
-transformer.main(ids)
+    # 6) Tokenize sequences
+    sequences = []
+    # load sequences from the file
+    with open("../out/sequences/sequences_train.txt", "r") as infile:
+        for line in infile.readlines():
+            line = line.strip()
+            splitpos = line.index("-")
+            dem, seq = line[:splitpos], line[1+splitpos:]
+            dem, seq = dem.split(","), seq.split(",")
+            sequences.append([dem, seq])
+    token_sequencer = TokenSequencer()
+    ids = token_sequencer.build_sequences(sequences)
+
+    # 7) Save tokenized sequences for training
+    out_dir = Path("../out/sequences")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    out_path = out_dir / "ids.json"
+    with open(out_path, "w") as f:
+        json.dump(ids, f)
+
+    print(f"Saved tokenized sequences to {out_path}")
+
+if __name__ == "__main__":
+    main()
