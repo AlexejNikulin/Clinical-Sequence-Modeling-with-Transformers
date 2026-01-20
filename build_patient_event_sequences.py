@@ -37,15 +37,17 @@ class EventSequencer():
         (1.0,       3.0,      4), #1–3d
         (3.0,       7.0,      5), #3–7d
         (7.0,       28.0,     6), #1–4w
-        (28,        90.0,     7), #1–3mo
+        (28.0,      90.0,     7), #1–3mo
         (90.0,      365.0,    8), #3–12mo
         (365.0,     1095.0,   9), #1-3y
         (1095.0,    36500.0, 10), #3-100y
-        (36500.00,  float("inf"), 11) #<100y mainly to catch the differnce between Dem events and other ones
+        (36500.0,   float("inf"), 11) #<100y mainly to catch the differnce between Dem events and other ones
         ]
 
     def build_patient_event_sequences(
+        self,
         df: pd.DataFrame,
+        vocab
     ) -> List[List[str]]:
         """
         Convert an event table into time-ordered event sequences per patient.
@@ -60,9 +62,6 @@ class EventSequencer():
         Returns:
             List[List[str]]: one ordered list of event strings per subject_id
         """
-      
-        converter = TokenConverter()
-    
         sequences = []
     
         df = df.copy()
@@ -81,28 +80,77 @@ class EventSequencer():
                     gap_category = "start"
                 else:
                     gap_days = (current_timestamp - previous_timestamp).total_seconds() / 86400
-                    gap_category = categorize_time_gap(gap_days)
+                    gap_category = self.categorize_time_gap(gap_days)
     
                 # Make sure that last event is neither too close nore a DEM event
                 #if gap_category not in {0, 11}:
                     # Add time event
     
-                event = converter.convert_row_to_token_seq(row)
+                event = vocab.row_to_token(row)
     
                 if row["event_type"] == "DEM":
                     patient_sequences[0].append(event)
                 else:
                     patient_sequences[1].append(event)
     
-            sequences.appent(patient_sequences)
+            sequences.append(patient_sequences)
     
         return sequences
 
-    def categorize_time_gap(gap_days: float) -> str:
-        for lower, upper, label in TIME_GAP_BINS:
+    def categorize_time_gap(self, gap_days: float) -> str:
+        for lower, upper, label in self.TIME_GAP_BINS:
             if lower < gap_days <= upper:
                 return label
-        return "unknown"
+        #return "unknown"
+        return "0"
+    
+    def add_time_tokens_to_data(self, df: pd.DataFrame):
+        rows = []
+
+        previous_subject = None
+        previous_timestamp = None
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        idx = 0
+
+        for _, row in df.iterrows():
+            current_subject = row["subject_id"]
+            current_timestamp = row["timestamp"]
+
+            if(row["event_type"] != "TIME"):
+                if previous_subject != current_subject:
+                    gap_category = "start"
+                    previous_timestamp = None
+                else:
+                    gap_days = (current_timestamp.to_pydatetime() - previous_timestamp.to_pydatetime()).total_seconds() / 86400
+                    gap_category = self.categorize_time_gap(gap_days)
+                    print(f"{gap_days} -> {gap_category}")
+
+                if gap_category != "0":
+                    rows.append({
+                        "subject_id": current_subject,
+                        "timestamp": current_timestamp.to_pydatetime() - pd.Timedelta(seconds=1),
+                        "event_type": "TIME",
+                        "event_value": gap_category,
+                    })
+
+                rows.append(row.to_dict())
+
+            previous_subject = current_subject
+            previous_timestamp = current_timestamp
+
+        out = (
+            pd.DataFrame(rows)
+            .sort_values(["subject_id", "timestamp"])
+            .reset_index(drop=True)
+        )
+
+        out.to_csv(
+            Path("../out/splits_out/combined_train_timed.csv"), 
+            mode='w', 
+            header=0, 
+            index=False
+        )
+
 
 
     def build_stage_sequence_with_counts(self, df: pd.DataFrame, subject_id: int):

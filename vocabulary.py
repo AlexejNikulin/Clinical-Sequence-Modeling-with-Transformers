@@ -89,7 +89,7 @@ class TokenConverter:
         return f"[DIAG{icd_code}]" if is_icd_10 else f"[DIAG9_{icd_code}]"
  
     def lab_to_token(self, icd_code: str, result: str) -> str:
-        return f"[LAB_{icd_code}_{result}]" if result != "" else f"[LAB_{icd_code}]"
+        return f"[LAB_{icd_code}_{result}]" if result != "nan" and result != "" else f"[LAB_{icd_code}]"
  
     def med_to_token(self, drug_cd: str, dose: str) -> str:
         return f"[MED_{drug_cd}_{dose}]" if dose != "nan" else f"[MED_{drug_cd}]"
