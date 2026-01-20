@@ -27,6 +27,55 @@ class TokenSequencer:
     - Padding/masks are created later.
     """
 
+    def tokens_to_ids_combined(
+        self,
+        token_sequences: List[List[Any]],
+        vocab,
+        *,
+        drop_empty: bool = True,
+        keep_unk: bool = True,
+        min_len: int = 1,
+    ) -> List[List[int]]:
+        pad_id = vocab.token_to_id(vocab.get_padding_token())
+        unk_id = vocab.token_to_id(vocab.get_unknown_token())
+
+        all_ids: List[List[int]] = []
+
+        for i, seq in enumerate(token_sequences):
+            if not isinstance(seq, list):
+                raise ValueError(
+                    f"Invalid patient entry at index {i}. Expected a list of tokens, got: {type(seq)}"
+                )
+
+            ids: List[int] = []
+
+            for tok in seq:
+                if tok is None:
+                    continue
+                s = str(tok).strip()
+                if s == "":
+                    continue
+
+                tid = vocab.token_to_id(s)
+
+                # optionally drop unknowns
+                if tid == unk_id and not keep_unk:
+                    continue
+
+                # never carry PAD from upstream
+                if tid == pad_id:
+                    continue
+
+                ids.append(tid)
+
+            if drop_empty:
+                if len(ids) < min_len:
+                    continue
+
+            all_ids.append(ids)
+
+        return all_ids
+
     def tokens_to_ids(
         self,
         token_sequences: List[List[List[str]]],
@@ -81,30 +130,42 @@ class TokenSequencer:
 
     def build_sequences(
         self,
-        token_sequences: List[List[List[str]]],
+        token_sequences,
+        combine_lists: bool,
         *,
         vocab_path: Path = Path("../out/vocab/vocabulary.json"),
-        out_json: Optional[Path] = Path("../out/ids.json"),
+        out_json: Optional[Path] = Path("../out/sequences/ids.json"),
         drop_empty: bool = True,
         keep_unk: bool = True,
         min_len: int = 1,
-    ) -> List[List[int]]:
+    ):
         from vocabulary import Vocabulary
 
         vocab = Vocabulary.load(vocab_path)
 
-        ids = self.tokens_to_ids(
-            token_sequences,
-            vocab,
-            drop_empty=drop_empty,
-            keep_unk=keep_unk,
-            min_len=min_len,
-        )
+        if(combine_lists):
+            ids = self.tokens_to_ids_combined(
+                token_sequences,
+                vocab,
+                drop_empty=drop_empty,
+                keep_unk=keep_unk,
+                min_len=min_len,
+            )
+        else:
+            ids = self.tokens_to_ids(
+                token_sequences,
+                vocab,
+                drop_empty=drop_empty,
+                keep_unk=keep_unk,
+                min_len=min_len,
+            )
 
         if out_json is not None:
             out_json.parent.mkdir(parents=True, exist_ok=True)
             with open(out_json, "w", encoding="utf-8") as f:
                 json.dump(ids, f, indent=2)
+
+        print(f"Saved tokenized sequences to {out_json}")
 
         return ids
 

@@ -9,6 +9,8 @@ class PatientLevelEventExtractor:
     def __init__(self):
         self.DATA_DIR = Path(r"../physionet.org/files/mimiciv/3.1/hosp")
         self.OUT_DIR  = Path(r"../out/extract_patient_level_events")
+        # TODO: EDIT PATH
+        #self.REF_VAL_DIR  = Path(r"../out/extract_patient_level_events")
 
         self.OUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -20,6 +22,9 @@ class PatientLevelEventExtractor:
         self.DLABITEMS_CSV  = self.DATA_DIR / "d_labitems.csv"
         self.EMAR_CSV       = self.DATA_DIR / "emar.csv"
         self.EMAR_DETAIL_CSV       = self.DATA_DIR / "emar_detail.csv"
+
+        # TODO: EDIT PATH
+        #self.REF_VAL_CSV = self.REF_VAL_DIR / "ref_val.csv"
 
         # Output files
         self.OUT_DYNAMIC = self.OUT_DIR / "events_dynamic_"
@@ -140,19 +145,38 @@ class PatientLevelEventExtractor:
             chunksize=1_000_000
         ) as reader:
             
+            # TODO: EDIT
+            #ref_vals = pd.read_csv(self.REF_VAL_CSV)
+            
             for i, chunk in enumerate(reader):
                 chunk["charttime"] = self.to_dt(chunk["charttime"])
                 chunk = chunk.dropna(subset=["charttime"])
 
                 chunk["event_type"] = 3
-                chunk["result"] = chunk["flag"]
-
                 chunk["event_value"] = chunk["itemid"].map(item_map)
                 
                 # Fallback for unknown IDs
                 mask_unknown = chunk["event_value"].isna()
                 if mask_unknown.any():
                     chunk.loc[mask_unknown, "event_value"] = "UNK"
+
+                # TODO: EDIT
+                # row_ref = ref_vals[ref_vals["item_id"] == chunk["item_id"]]
+
+                # if row_ref.empty:
+                #     chunk["result"] = ""
+                # else:
+                #     low = row_ref["ref_range_lower"].iloc[0]
+                #     high = row_ref["ref_range_upper"].iloc[0]
+
+                #     if pd.notna(low) and chunk["valuenum"] < low:
+                #         chunk["result"] = "LOW"
+                #     elif pd.notna(high) and chunk["valuenum"] > high:
+                #         chunk["result"] = "HIGH"
+                #     else:
+                #         chunk["result"] = "NORMAL"
+
+                chunk["result"] = chunk["flag"]
 
                 chunk = chunk.rename(columns={
                     "charttime": "timestamp",

@@ -28,64 +28,129 @@ class EventSequencer():
             "patients": "Patient Data",
         }
 
+    
+        self.TIME_GAP_BINS = [
+        (0.0,       1/24,     0), #≤1h
+        (1/24,      3/24,     1), #1–3h
+        (3/24,      12/24,    2), #3–12h
+        (12/24,     1.0,      3), #12–24h
+        (1.0,       3.0,      4), #1–3d
+        (3.0,       7.0,      5), #3–7d
+        (7.0,       28.0,     6), #1–4w
+        (28.0,      90.0,     7), #1–3mo
+        (90.0,      365.0,    8), #3–12mo
+        (365.0,     1095.0,   9), #1-3y
+        (1095.0,    36500.0, 10), #3-100y
+        (36500.0,   float("inf"), 11) #<100y mainly to catch the differnce between Dem events and other ones
+        ]
 
     def build_patient_event_sequences(
         self,
         df: pd.DataFrame,
-    ) -> List[List[List[str]]]:
+        vocab
+    ) -> List[List[str]]:
         """
         Convert an event table into time-ordered event sequences per patient.
-
+    
         Expected columns:
             - subject_id
             - timestamp
             - event_type
             - event_value
             - source
-
+    
         Returns:
             List[List[str]]: one ordered list of event strings per subject_id
         """
-
-        self.MAX_TIME_GAP = 0.1
-        
-        VOCAB_PATH = Path("../out/vocab/vocabulary.json")
-        vocab = Vocabulary.load(VOCAB_PATH)
-
         sequences = []
-
-        # df = df.copy()
+    
+        df = df.copy()
         df["timestamp"] = pd.to_datetime(df["timestamp"])
-
-        for subject_id, group in tqdm(df.groupby("subject_id")):
+    
+        for subject_id, group in df.groupby("subject_id"):
             patient_sequences = [[], []]
-
+    
             previous_timestamp = None
-
+    
             for _, row in group.iterrows():
-                current_timestamp = row["timestamp"].to_pydatetime()
-                event = vocab.row_to_token(row)
-
-                if previous_timestamp is not None:
-                    gap_days = (current_timestamp - previous_timestamp).total_seconds() / 86400
-                else:
+                current_timestamp = row["timestamp"]
+    
+                if previous_timestamp is None:
                     gap_days = 0.0
-
+                    gap_category = "start"
+                else:
+                    gap_days = (current_timestamp - previous_timestamp).total_seconds() / 86400
+                    gap_category = self.categorize_time_gap(gap_days)
+    
                 # Make sure that last event is neither too close nore a DEM event
-                # if gap_days >= self.MAX_TIME_GAP and gap_days <= 36500:
-                #     # append Time Token
-                #     continue
-
+                #if gap_category not in {0, 11}:
+                    # Add time event
+    
+                event = vocab.row_to_token(row)
+    
                 if row["event_type"] == "DEM":
                     patient_sequences[0].append(event)
                 else:
                     patient_sequences[1].append(event)
-
-                previous_timestamp = current_timestamp
-
+    
             sequences.append(patient_sequences)
-
+    
         return sequences
+
+    def categorize_time_gap(self, gap_days: float) -> str:
+        for lower, upper, label in self.TIME_GAP_BINS:
+            if lower < gap_days <= upper:
+                return label
+        #return "unknown"
+        return "0"
+    
+    def add_time_tokens_to_data(self, df: pd.DataFrame):
+        rows = []
+
+        previous_subject = None
+        previous_timestamp = None
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        idx = 0
+
+        for _, row in df.iterrows():
+            current_subject = row["subject_id"]
+            current_timestamp = row["timestamp"]
+
+            if(row["event_type"] != "TIME"):
+                if previous_subject != current_subject:
+                    gap_category = "start"
+                    previous_timestamp = None
+                else:
+                    gap_days = (current_timestamp.to_pydatetime() - previous_timestamp.to_pydatetime()).total_seconds() / 86400
+                    gap_category = self.categorize_time_gap(gap_days)
+                    print(f"{gap_days} -> {gap_category}")
+
+                if gap_category != "0":
+                    rows.append({
+                        "subject_id": current_subject,
+                        "timestamp": current_timestamp.to_pydatetime() - pd.Timedelta(seconds=1),
+                        "event_type": "TIME",
+                        "event_value": gap_category,
+                    })
+
+                rows.append(row.to_dict())
+
+            previous_subject = current_subject
+            previous_timestamp = current_timestamp
+
+        out = (
+            pd.DataFrame(rows)
+            .sort_values(["subject_id", "timestamp"])
+            .reset_index(drop=True)
+        )
+
+        out.to_csv(
+            Path("../out/splits_out/combined_train_timed.csv"), 
+            mode='w', 
+            header=0, 
+            index=False
+        )
+
 
 
     def build_stage_sequence_with_counts(self, df: pd.DataFrame, subject_id: int):
@@ -219,6 +284,7 @@ class EventSequencer():
 
     # subject_id = 10000032
     # visualize_sequence(df, subject_id)
+
 
 
 
