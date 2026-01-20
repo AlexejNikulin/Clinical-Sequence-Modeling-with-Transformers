@@ -81,47 +81,44 @@ class TokenSequencer:
 
     def tokens_to_ids(
         self,
-        token_sequences: List[List[List[str]]],
+        token_sequences: List[List[Any]],
         vocab,
         *,
         drop_empty: bool = True,
         keep_unk: bool = True,
         min_len: int = 1,
-    ) -> List[List[List[int]]]:
+    ) -> List[List[int]]:
         pad_id = vocab.token_to_id(vocab.get_padding_token())
         unk_id = vocab.token_to_id(vocab.get_unknown_token())
 
         all_ids: List[List[int]] = []
 
-        for i, seq in tqdm(enumerate(token_sequences), total=len(token_sequences)):
+        for i, seq in enumerate(token_sequences):
             if not isinstance(seq, list):
                 raise ValueError(
                     f"Invalid patient entry at index {i}. Expected a list of tokens, got: {type(seq)}"
                 )
 
-            ids: List[List[int]] = []
+            ids: List[int] = []
 
-            for data_type in seq: # demographic vs. non-demographic data
-                local_ids: List[int] = []
-                for tok in data_type:
-                    if tok is None:
-                        continue
-                    s = str(tok).strip()
-                    if s == "":
-                        continue
+            for tok in seq:
+                if tok is None:
+                    continue
+                s = str(tok).strip()
+                if s == "":
+                    continue
 
-                    tid = vocab.token_to_id(s)
+                tid = vocab.token_to_id(s)
 
-                    # optionally drop unknowns
-                    if tid == unk_id and not keep_unk:
-                        continue
+                # optionally drop unknowns
+                if tid == unk_id and not keep_unk:
+                    continue
 
-                    # never carry PAD from upstream
-                    if tid == pad_id:
-                        continue
+                # never carry PAD from upstream
+                if tid == pad_id:
+                    continue
 
-                    local_ids.append(tid)
-                ids.append(local_ids)
+                ids.append(tid)
 
             if drop_empty:
                 if len(ids) < min_len:
@@ -141,7 +138,7 @@ class TokenSequencer:
         drop_empty: bool = True,
         keep_unk: bool = True,
         min_len: int = 1,
-    ) -> List[List[int]]:
+    ):
         from vocabulary import Vocabulary
 
         vocab = Vocabulary.load(vocab_path)
