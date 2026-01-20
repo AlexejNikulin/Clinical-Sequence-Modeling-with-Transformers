@@ -43,16 +43,7 @@ def main():
 
     # # 6) Tokenize sequences
     # token_sequencer = TokenSequencer()
-    # ids = token_sequencer.build_sequences(sequences, false)
-
-    # out_dir = Path("../out/sequences")
-    # out_dir.mkdir(parents=True, exist_ok=True)
-
-    # out_path = out_dir / "ids.json"
-    # with open(out_path, "w") as f:
-    #     json.dump(ids, f)
-
-    # print(f"Saved tokenized sequences to {out_path}")
+    # ids = token_sequencer.build_sequences(sequences, False)
 
 if __name__ == "__main__":
     main()
