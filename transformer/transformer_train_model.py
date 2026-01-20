@@ -21,6 +21,8 @@ Or from transformer/ folder:
 
 from __future__ import annotations
 
+from tqdm import tqdm
+import torch.nn.functional as F
 import os
 import csv
 import json
@@ -47,6 +49,8 @@ except ModuleNotFoundError:
 
 from mlm_masking import mlm_mask_801010
 from compact_transformer_encoder import CompactTransformerConfig, CompactTransformerEncoder
+from evaluation.next_event_eval import _extract_logits, build_next_event_objective
+from evaluation.clinical_eval_utils import IGNORE_INDEX
 
 
 # =================================================
@@ -283,6 +287,9 @@ class TransformerTrainer:
         input_ids: List[List[int]],
         attention_mask: List[List[int]],
         segment_ids: Optional[List[List[int]]],
+        val_input_ids: List[List[int]],
+        val_attention_mask: List[List[int]],
+        val_segment_ids: Optional[List[List[int]]],
         cfg: CompactTransformerConfig,
         steps: int,
         batch_size: int,
@@ -291,7 +298,7 @@ class TransformerTrainer:
         seed: int = 0,
         mask_demo: bool = False,
         log_every: int = 10,
-    ) -> None:
+    ) -> CompactTransformerEncoder:
         set_seed(seed)
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -302,12 +309,19 @@ class TransformerTrainer:
             batch_size,
         )
 
+        val_loader = make_dataloader(
+            val_input_ids,
+            val_attention_mask,
+            val_segment_ids if cfg.use_event_type_embeddings else None,
+            batch_size,
+        )
+
         model = CompactTransformerEncoder(cfg).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
         model.train()
 
         log_path = self.make_run_log_path()
-        fieldnames = ["step", "loss", "grad_norm", "logits_max", "n_masked", "masked_ratio"]
+        fieldnames = ["step", "loss", "val_loss", "grad_norm", "logits_max", "n_masked", "masked_ratio"]
 
         with open(log_path, "w", newline="") as f:
             csv.DictWriter(f, fieldnames=fieldnames).writeheader()
@@ -316,11 +330,15 @@ class TransformerTrainer:
         print(asdict(cfg))
         print(f"device={device}")
         print(f"log_path={log_path}")
+        print(f"steps={steps}")
         print("=======================\n")
 
         data_iter = iter(loader)
+        val_iter = iter(val_loader)
+        total_loss = 0.0
+        total_loss_count = 0
 
-        for step in range(steps):
+        for step in tqdm(range(steps)):
             try:
                 batch = next(data_iter)
             except StopIteration:
@@ -341,6 +359,8 @@ class TransformerTrainer:
 
             loss = out["loss"]
             loss.backward()
+            total_loss += float(loss.item())
+            total_loss_count += 1
 
             grad_norm = self.global_grad_norm(model)
             optimizer.step()
@@ -353,9 +373,57 @@ class TransformerTrainer:
             masked_ratio = n_masked / max(1, n_valid)
 
             if step % log_every == 0:
+                # Calculate validation loss
+                model.eval()
+
+                VAL_BATCHES = 10
+                total_val_loss = 0.0
+                for _ in range(VAL_BATCHES):
+                    try:
+                        val_batch = next(val_iter)
+                    except StopIteration:
+                        val_iter = iter(loader)
+                        val_batch = next(val_iter)
+                    
+                    input_ids = val_batch["input_ids"].to(device)
+                    attention_mask = val_batch["attention_mask"].to(device)
+                    event_type_ids = val_batch["event_type_ids"].to(device)
+
+                    masked_ids, labels = build_next_event_objective(
+                        input_ids,
+                        attention_mask,
+                        event_type_ids,
+                        mask_token_id=vocab.token_to_id(vocab.get_masking_token()),
+                    )
+
+                    out = model(
+                        input_ids=masked_ids,
+                        attention_mask=attention_mask,
+                        event_type_ids=event_type_ids,
+                        labels=None,
+                        return_hidden=False,
+                    )
+                    logits = _extract_logits(out)
+
+                    val_loss = F.cross_entropy(
+                        logits.view(-1, logits.size(-1)),
+                        labels.view(-1),
+                        ignore_index=IGNORE_INDEX,
+                        reduction="mean",
+                    )
+                    total_val_loss += float(val_loss.item())
+
+                val_loss = total_val_loss / VAL_BATCHES
+                model.train()
+
+                # Print stats
+                train_loss = total_loss / total_loss_count
+                total_loss = 0.0
+                total_loss_count = 0
                 print(
                     f"[step {step:4d}] "
-                    f"loss={loss.item():.4f} "
+                    f"loss={train_loss:.4f} "
+                    f"val_loss={val_loss:.4f} "
                     f"grad_norm={grad_norm:.3f} "
                     f"logits_max={logits_max:.3f} "
                     f"n_masked={n_masked} "
@@ -366,7 +434,8 @@ class TransformerTrainer:
                     csv.DictWriter(f, fieldnames=fieldnames).writerow(
                         {
                             "step": step,
-                            "loss": float(loss.item()),
+                            "loss": train_loss,
+                            "val_loss": val_loss,
                             "grad_norm": float(grad_norm),
                             "logits_max": float(logits_max),
                             "n_masked": int(n_masked),
@@ -377,6 +446,8 @@ class TransformerTrainer:
         print("\nTraining finished.")
         print(f"Logs written to {log_path}")
 
+        return model
+
 
 # =================================================
 # Änderung 2: main() minimal anpassen
@@ -385,7 +456,7 @@ def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--steps", type=int, default=1000)
+    parser.add_argument("--epochs", type=float, default=32.0)
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--max_len", type=int, default=256)
     parser.add_argument("--lr", type=float, default=3e-4)
@@ -395,13 +466,15 @@ def main() -> None:
     parser.add_argument("--no_event_types", action="store_true")
 
     # IMPORTANT: defaults relative to repo root
-    parser.add_argument("--ids_path", type=str, default="../out/ids.json")
+    parser.add_argument("--ids_path", type=str, default="../out/sequences/ids.json")
+    parser.add_argument("--val_ids_path", type=str, default="../out/sequences/val_ids.json")
     parser.add_argument("--vocab_path", type=str, default="../out/vocab/vocabulary.json")
     args = parser.parse_args()
 
     # Resolve robustly (works from repo root OR transformer/)
     repo_root = Path(__file__).resolve().parents[1]
     ids_path = (Path(args.ids_path) if Path(args.ids_path).is_absolute() else repo_root / args.ids_path).resolve()
+    val_ids_path = (Path(args.val_ids_path) if Path(args.val_ids_path).is_absolute() else repo_root / args.val_ids_path).resolve()
     vocab_path = (Path(args.vocab_path) if Path(args.vocab_path).is_absolute() else repo_root / args.vocab_path).resolve()
 
     # Load Vocabulary
@@ -413,6 +486,7 @@ def main() -> None:
 
     # Load ids.json sequences
     joint_sequences = load_joint_sequences_from_ids(ids_path)
+    val_joint_sequences = load_joint_sequences_from_ids(val_ids_path)
 
     cfg = CompactTransformerConfig(
         vocab_size=vocab.get_size(),
@@ -433,21 +507,33 @@ def main() -> None:
         sep_id=sep_id,
     )
 
+    val_input_ids, val_attention_mask, val_segment_ids = build_from_joint_format(
+        joint_data=val_joint_sequences,
+        max_len=cfg.max_len,
+        pad_id=cfg.pad_token_id,
+        sep_id=sep_id,
+    )
+
     trainer = TransformerTrainer()
-    trainer.train_mlm(
+    trained_model = trainer.train_mlm(
         vocab=vocab,
         input_ids=input_ids,
         attention_mask=attention_mask,
         segment_ids=segment_ids,
+        val_input_ids=val_input_ids,
+        val_attention_mask=val_attention_mask,
+        val_segment_ids=val_segment_ids,
         cfg=cfg,
-        steps=args.steps,
+        steps=int(args.epochs * len(input_ids) / args.batch_size),
         batch_size=args.batch_size,
         lr=args.lr,
         p_mlm=args.p_mlm,
         seed=args.seed,
         mask_demo=args.mask_demo,
-        log_every=10,
+        log_every=1000,
     )
+
+    torch.save(trained_model.state_dict(), 'model_weights.pth')
 
 
 if __name__ == "__main__":
