@@ -10,6 +10,8 @@ import json
 
 def main():
 
+    print("START!")
+
     # 1) Extract patient-level events
     # extractor = PatientLevelEventExtractor()
     # extractor.start_extraction()
@@ -27,25 +29,24 @@ def main():
     # vocab.build_vocabulary()
 
     # 5) Build patient event sequences
-    COMBINED_CSV = Path("../out/splits_out/combined_train.csv")
-    df = pd.read_csv(COMBINED_CSV)
+    # COMBINED_CSV = Path("../out/splits_out/combined_train.csv")
+    # df = pd.read_csv(COMBINED_CSV)
 
-    event_sequencer = EventSequencer()
-    sequences = event_sequencer.build_patient_event_sequences(df)
+    # event_sequencer = EventSequencer()
+    # sequences = event_sequencer.build_patient_event_sequences(df)
 
     # 6) Tokenize sequences
-    token_sequencer = TokenSequencer()
-    ids = token_sequencer.build_sequences(sequences)
+    # token_sequencer = TokenSequencer()
+    # ids = token_sequencer.build_sequences(sequences)
 
-    # 7) Save tokenized sequences for training
-    out_dir = Path("../out/sequences")
-    out_dir.mkdir(parents=True, exist_ok=True)
+    # out_dir = Path("../out/sequences")
+    # out_dir.mkdir(parents=True, exist_ok=True)
 
-    out_path = out_dir / "ids.json"
-    with open(out_path, "w") as f:
-        json.dump(ids, f)
+    # out_path = out_dir / "ids.json"
+    # with open(out_path, "w") as f:
+    #     json.dump(ids, f)
 
-    print(f"Saved tokenized sequences to {out_path}")
+    # print(f"Saved tokenized sequences to {out_path}")
 
 if __name__ == "__main__":
     main()
