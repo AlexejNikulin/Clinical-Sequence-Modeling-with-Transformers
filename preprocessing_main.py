@@ -1,4 +1,5 @@
 from extract_patient_level_events import PatientLevelEventExtractor
+from extract_patient_level_events_short import PatientLevelEventExtractor_Short
 from sort_and_merge import SortMerger
 from split_combined import DataSplitter
 from vocabulary import Vocabulary
@@ -14,7 +15,11 @@ def main():
     print("START!")
 
     # # 1) Extract patient-level events
-    # extractor = PatientLevelEventExtractor()
+    # # extractor = PatientLevelEventExtractor()
+    # # extractor.start_extraction()
+
+    # # Short version for debugging
+    # extractor = PatientLevelEventExtractor_Short()
     # extractor.start_extraction()
 
     # # 2) Sort and merge events
