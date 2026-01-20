@@ -4,6 +4,7 @@ from split_combined import DataSplitter
 from vocabulary import Vocabulary
 from build_patient_event_sequences import EventSequencer
 from tokenize_sequences import TokenSequencer
+
 from pathlib import Path
 import pandas as pd
 import json
@@ -12,32 +13,32 @@ def main():
 
     print("START!")
 
-    # 1) Extract patient-level events
+    # # 1) Extract patient-level events
     # extractor = PatientLevelEventExtractor()
     # extractor.start_extraction()
 
-    # 2) Sort and merge events
+    # # 2) Sort and merge events
     # sort_merger = SortMerger()
     # sort_merger.sort_and_merge()
 
-    # 3) Train/val/test split
+    # # 3) Train/val/test split
     # splitter = DataSplitter()
     # splitter.split_dataset()
 
-    # 4) Build vocabulary
+    # # 4) Build vocabulary
     # vocab = Vocabulary()
     # vocab.build_vocabulary()
 
-    # 5) Build patient event sequences
+    # # 5) Build patient event sequences
     # COMBINED_CSV = Path("../out/splits_out/combined_train.csv")
     # df = pd.read_csv(COMBINED_CSV)
 
     # event_sequencer = EventSequencer()
     # sequences = event_sequencer.build_patient_event_sequences(df)
 
-    # 6) Tokenize sequences
+    # # 6) Tokenize sequences
     # token_sequencer = TokenSequencer()
-    # ids = token_sequencer.build_sequences(sequences)
+    # ids = token_sequencer.build_sequences(sequences, false)
 
     # out_dir = Path("../out/sequences")
     # out_dir.mkdir(parents=True, exist_ok=True)
