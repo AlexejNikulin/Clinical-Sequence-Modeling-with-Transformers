@@ -132,9 +132,9 @@ class TokenSequencer:
         self,
         token_sequences,
         combine_lists: bool,
+        out_json: Optional[Path] = Path("../out/sequences/ids.json"),
         *,
         vocab_path: Path = Path("../out/vocab/vocabulary.json"),
-        out_json: Optional[Path] = Path("../out/sequences/ids.json"),
         drop_empty: bool = True,
         keep_unk: bool = True,
         min_len: int = 1,
@@ -161,7 +161,6 @@ class TokenSequencer:
             )
 
         if out_json is not None:
-            out_json.parent.mkdir(parents=True, exist_ok=True)
             with open(out_json, "w", encoding="utf-8") as f:
                 json.dump(ids, f, indent=2)
 
