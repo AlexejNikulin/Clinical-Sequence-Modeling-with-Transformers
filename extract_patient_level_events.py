@@ -176,6 +176,8 @@ class PatientLevelEventExtractor:
                 #     else:
                 #         chunk["result"] = "NORMAL"
 
+                chunk["result"] = chunk["flag"]
+
                 chunk = chunk.rename(columns={
                     "charttime": "timestamp",
                     "valuenum": "value_num",
