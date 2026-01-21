@@ -9,6 +9,7 @@ for logfile in os.listdir("logs"):
         continue
 
     df = pd.read_csv('logs/' + logfile)
+    df = df[df['step'] <= 300000]
     df['loss_running_avg'] = df['loss'].rolling(window=WINDOW_SIZE, min_periods=1).mean()
     df['val_loss_running_avg'] = df['val_loss'].rolling(window=WINDOW_SIZE, min_periods=1).mean()
 

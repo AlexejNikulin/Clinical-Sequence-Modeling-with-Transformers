@@ -459,6 +459,7 @@ def main() -> None:
     parser.add_argument("--epochs", type=float, default=32.0)
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--max_len", type=int, default=256)
+    parser.add_argument("--d_model", type=int, default=192)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--p_mlm", type=float, default=0.15)
     parser.add_argument("--seed", type=int, default=0)
@@ -491,7 +492,7 @@ def main() -> None:
     cfg = CompactTransformerConfig(
         vocab_size=vocab.get_size(),
         max_len=args.max_len,
-        d_model=192,
+        d_model=args.d_model,
         n_layers=3,
         n_heads=6,
         use_event_type_embeddings=(not args.no_event_types),
