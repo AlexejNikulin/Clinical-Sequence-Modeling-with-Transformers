@@ -65,26 +65,11 @@ class EventSequencer():
         sequences = []
     
         df = df.copy()
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
     
         for subject_id, group in df.groupby("subject_id"):
             patient_sequences = [[], []]
-    
-            previous_timestamp = None
-    
+
             for _, row in group.iterrows():
-                current_timestamp = row["timestamp"]
-    
-                if previous_timestamp is None:
-                    gap_days = 0.0
-                    gap_category = "start"
-                else:
-                    gap_days = (current_timestamp - previous_timestamp).total_seconds() / 86400
-                    gap_category = self.categorize_time_gap(gap_days)
-    
-                # Make sure that last event is neither too close nore a DEM event
-                #if gap_category not in {0, 11}:
-                    # Add time event
     
                 event = vocab.row_to_token(row)
     
@@ -99,44 +84,47 @@ class EventSequencer():
 
     def categorize_time_gap(self, gap_days: float) -> str:
         for lower, upper, label in self.TIME_GAP_BINS:
-            if lower < gap_days <= upper:
+            if lower <= gap_days <= upper:
                 return label
-        #return "unknown"
-        return "0"
+        return "unknown"
+
     
     def add_time_tokens_to_data(self, df: pd.DataFrame):
         rows = []
 
         previous_subject = None
         previous_timestamp = None
+        previous_event_type = None
         df["timestamp"] = pd.to_datetime(df["timestamp"])
         idx = 0
 
         for _, row in df.iterrows():
             current_subject = row["subject_id"]
             current_timestamp = row["timestamp"]
+            current_event_type = row["event_type"]
 
             if(row["event_type"] != "TIME"):
-                if previous_subject != current_subject:
-                    gap_category = "start"
-                    previous_timestamp = None
-                else:
-                    gap_days = (current_timestamp.to_pydatetime() - previous_timestamp.to_pydatetime()).total_seconds() / 86400
-                    gap_category = self.categorize_time_gap(gap_days)
-                    print(f"{gap_days} -> {gap_category}")
+                if(previous_event_type != "DEM"):
+                    if previous_subject != current_subject:
+                        gap_category = "start"
+                        previous_timestamp = None
+                    else:
+                        gap_days = (current_timestamp.to_pydatetime() - previous_timestamp.to_pydatetime()).total_seconds() / 86400
+                        gap_category = self.categorize_time_gap(gap_days)
 
-                if gap_category != "0":
-                    rows.append({
-                        "subject_id": current_subject,
-                        "timestamp": current_timestamp.to_pydatetime() - pd.Timedelta(seconds=1),
-                        "event_type": "TIME",
-                        "event_value": gap_category,
-                    })
+                    if gap_category != 0:
+                        rows.append({
+                            "subject_id": current_subject,
+                            "timestamp": current_timestamp.to_pydatetime() - pd.Timedelta(seconds=1),
+                            "event_type": "TIME",
+                            "event_value": gap_category,
+                        })
 
                 rows.append(row.to_dict())
 
             previous_subject = current_subject
             previous_timestamp = current_timestamp
+            previous_event_type = current_event_type
 
         out = (
             pd.DataFrame(rows)
@@ -145,13 +133,11 @@ class EventSequencer():
         )
 
         out.to_csv(
-            Path("../out/splits_out/combined_train_timed.csv"), 
+            Path("../out/merge_and_sort/combined.csv"), 
             mode='w', 
-            header=0, 
+            header=True, 
             index=False
         )
-
-
 
     def build_stage_sequence_with_counts(self, df: pd.DataFrame, subject_id: int):
         """

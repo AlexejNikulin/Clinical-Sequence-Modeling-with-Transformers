@@ -77,7 +77,7 @@ class TokenConverter:
         return f"[{event_value}]"
     
     def time_to_token(self, event_value: str) -> str:
-        return f"[{event_value}]"
+        return f"[TIME_CAT_{event_value}]"
  
     def readm_to_token(self, dis_type) -> str:
         return f"[READM_{dis_type}]"
@@ -129,8 +129,8 @@ class Vocabulary:
 
     # Start IDs per block
     START_SPECIAL: int = 0
-    START_TIME: int = 5
-    START_DEM_GEN: int = 10
+    START_TIME: int = 3
+    START_DEM_GEN: int = 15
     START_DEM_AGE: int = 18
     START_ADM: int = 100
     START_DIAG: int = 110
