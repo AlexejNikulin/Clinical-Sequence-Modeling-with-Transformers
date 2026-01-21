@@ -278,7 +278,9 @@ class TransformerTrainer:
     def make_run_log_path(self, base_dir: str = "logs", prefix: str = "train_log") -> str:
         self.ensure_dir(base_dir)
         stamp = time.strftime("%Y%m%d_%H%M%S")
-        return os.path.join(base_dir, f"{prefix}_{stamp}.csv")
+        log_path = os.path.join(base_dir, f"{prefix}_{stamp}.csv")
+        checkpoint_path = os.path.join("checkpoints", f"{prefix}_{stamp}.pth")
+        return log_path, checkpoint_path
 
     def train_mlm(
         self,
@@ -298,7 +300,7 @@ class TransformerTrainer:
         seed: int = 0,
         mask_demo: bool = False,
         log_every: int = 10,
-    ) -> CompactTransformerEncoder:
+    ):
         set_seed(seed)
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -320,7 +322,7 @@ class TransformerTrainer:
         optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
         model.train()
 
-        log_path = self.make_run_log_path()
+        log_path, checkpoint_path = self.make_run_log_path()
         fieldnames = ["step", "loss", "val_loss", "grad_norm", "logits_max", "n_masked", "masked_ratio"]
 
         with open(log_path, "w", newline="") as f:
@@ -443,10 +445,11 @@ class TransformerTrainer:
                         }
                     )
 
+        torch.save(model.state_dict(), checkpoint_path)
+
         print("\nTraining finished.")
         print(f"Logs written to {log_path}")
-
-        return model
+        print(f"Checkpoint written to {checkpoint_path}")
 
 
 # =================================================
@@ -456,7 +459,7 @@ def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--epochs", type=float, default=32.0)
+    parser.add_argument("--epochs", type=float, default=0.1)
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--max_len", type=int, default=256)
     parser.add_argument("--d_model", type=int, default=192)
@@ -516,7 +519,7 @@ def main() -> None:
     )
 
     trainer = TransformerTrainer()
-    trained_model = trainer.train_mlm(
+    trainer.train_mlm(
         vocab=vocab,
         input_ids=input_ids,
         attention_mask=attention_mask,
@@ -533,8 +536,6 @@ def main() -> None:
         mask_demo=args.mask_demo,
         log_every=1000,
     )
-
-    torch.save(trained_model.state_dict(), 'model_weights.pth')
 
 
 if __name__ == "__main__":
