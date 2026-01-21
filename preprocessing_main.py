@@ -23,8 +23,8 @@ def main():
     # extractor.start_extraction()
 
     # # 2) Sort and merge events
-    # sort_merger = SortMerger()
-    # sort_merger.sort_and_merge()
+    sort_merger = SortMerger()
+    sort_merger.sort_and_merge()
 
     # # 2.1) Add time tokens
     # COMBINED_CSV = Path("../out/merge_and_sort/combined.csv")
@@ -34,12 +34,12 @@ def main():
     # sequences = event_sequencer.add_time_tokens_to_data(df)
 
     # # 3) Train/val/test split
-    # splitter = DataSplitter()
-    # splitter.split_dataset()
+    splitter = DataSplitter()
+    splitter.split_dataset()
 
-    # # 4) Build vocabulary
-    # vocab = Vocabulary()
-    # vocab.build_vocabulary()
+    # 4) Build vocabulary
+    vocab = Vocabulary()
+    vocab.build_vocabulary()
 
     # # 5) Build patient event sequences
     # for COMBINED_CSV, OUT_IDS in [
