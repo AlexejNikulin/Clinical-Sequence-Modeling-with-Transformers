@@ -44,6 +44,7 @@ def main():
     # # 5) Build patient event sequences
     # for COMBINED_CSV, OUT_IDS in [
     #     ("../out/splits_out/combined_train.csv", "ids.json"),
+    #     ("../out/splits_out/combined_test.csv", "test_ids.json"),
     #     ("../out/splits_out/combined_val.csv", "val_ids.json"),
     # ]:
     #     df = pd.read_csv(COMBINED_CSV)
