@@ -21,5 +21,5 @@ for logfile in os.listdir("logs"):
     plt.title('Loss per Step')
     plt.grid(True)
     plt.legend()
-    plt.ylim(1, 4)
+    plt.ylim(1, 5)
     plt.savefig('logs/' + logfile.replace("csv", "png"))

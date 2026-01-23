@@ -31,7 +31,7 @@ import time
 import random
 from pathlib import Path
 from dataclasses import asdict
-from typing import Dict, Optional, List, Tuple
+from typing import Dict, Optional, List, Tuple, Literal
 import json
 
 import torch
@@ -47,7 +47,7 @@ except ModuleNotFoundError:
     # when executed directly: cd transformer && python transformer_train_model.py
     from ..vocabulary import Vocabulary  # type: ignore
 
-from mlm_masking import mlm_mask_801010
+from mlm_masking import mlm_mask_801010, mlm_mask_span_801010, mlm_mask_recency_801010
 from compact_transformer_encoder import CompactTransformerConfig, CompactTransformerEncoder
 from evaluation.next_event_eval import _extract_logits, build_next_event_objective
 from evaluation.clinical_eval_utils import IGNORE_INDEX
@@ -229,6 +229,7 @@ class TransformerTrainer:
         p_mlm: float,
         device: torch.device,
         mask_demo: bool = False,
+        mask_mode: Literal["token", "span", "recency"] = "token"
     ) -> Dict[str, torch.Tensor]:
         input_ids = batch["input_ids"].to(device)
         attention_mask = batch["attention_mask"].to(device)
@@ -246,7 +247,13 @@ class TransformerTrainer:
             effective_mask = attention_mask.clone()
             effective_mask[seg == 0] = 0
 
-        masked_input_ids, labels = mlm_mask_801010(
+        mask_function = mlm_mask_801010
+        if mask_mode == "span":
+            mask_function = mlm_mask_span_801010
+        elif mask_mode == "recency":
+            mask_function = mlm_mask_recency_801010
+
+        masked_input_ids, labels = mask_function(
             input_ids=input_ids,
             attention_mask=effective_mask,
             mask_token_id=mask_id,
@@ -299,6 +306,7 @@ class TransformerTrainer:
         p_mlm: float,
         seed: int = 0,
         mask_demo: bool = False,
+        mask_mode: Literal["token", "span", "recency"] = "token",
         log_every: int = 10,
     ):
         set_seed(seed)
@@ -354,6 +362,7 @@ class TransformerTrainer:
                 p_mlm=p_mlm,
                 device=device,
                 mask_demo=mask_demo,
+                mask_mode=mask_mode,
             )
 
             optimizer.zero_grad(set_to_none=True)
@@ -459,7 +468,7 @@ def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--epochs", type=float, default=0.1)
+    parser.add_argument("--epochs", type=float, default=32.0)
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--max_len", type=int, default=256)
     parser.add_argument("--d_model", type=int, default=192)
@@ -467,6 +476,7 @@ def main() -> None:
     parser.add_argument("--p_mlm", type=float, default=0.15)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--mask_demo", action="store_true")
+    parser.add_argument("--mask_mode", type=str, default="token", choices=["token", "span", "recency"])
     parser.add_argument("--no_event_types", action="store_true")
 
     # IMPORTANT: defaults relative to repo root
@@ -534,6 +544,7 @@ def main() -> None:
         p_mlm=args.p_mlm,
         seed=args.seed,
         mask_demo=args.mask_demo,
+        mask_mode=args.mask_mode,
         log_every=1000,
     )
 
