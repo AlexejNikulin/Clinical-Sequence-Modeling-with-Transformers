@@ -4,12 +4,13 @@ import pandas as pd
 import re
 from pathlib import Path
 from tqdm import tqdm
+import numpy as np
 
 class PatientLevelEventExtractor_Short:
     def __init__(self):
         self.DATA_DIR = Path(r"../physionet.org/files/mimiciv/3.1/hosp")
         self.OUT_DIR  = Path(r"../out/extract_patient_level_events")
-        self.REF_VAL_DIR  = Path(r"/ref_ranges")
+        self.REF_VAL_DIR  = Path(r"ref_ranges")
 
         self.ROWS = 1000
 
@@ -111,7 +112,7 @@ class PatientLevelEventExtractor_Short:
         diag10_events = diag_icd10[["subject_id", "timestamp", "event_type", "event_value", "result"]]
 
         # proxy timestamp from admissions dischtime
-        diag_icd9["timestamp"] = diag_icd9["hadm_id"].map(hadm_to_dischtime)
+        diag_icd9["timestamp"] = diag_icd9["hadm_id"].map(hadm_to_dischtime) 
         diag_icd9 = diag_icd9.dropna(subset=["timestamp"])
         diag_icd9["event_type"]  = 2
         diag_icd9["event_value"] = diag_icd9["icd_code"].map(lambda c: f"9_{self.sanitize_token(c)}")
@@ -152,37 +153,50 @@ class PatientLevelEventExtractor_Short:
                 chunk["charttime"] = self.to_dt(chunk["charttime"])
                 chunk = chunk.dropna(subset=["charttime"])
 
+                chunk = chunk.rename(columns={"charttime": "timestamp"})
+
                 chunk["event_type"] = 3
                 chunk["event_value"] = chunk["itemid"].map(item_map)
-                
+
                 # Fallback for unknown IDs
                 mask_unknown = chunk["event_value"].isna()
                 if mask_unknown.any():
                     chunk.loc[mask_unknown, "event_value"] = "UNK"
 
-                row_ref = ref_vals[ref_vals["item_id"] == chunk["item_id"]]
+                # --- ensure numeric ---
+                ref_vals["itemid"] = pd.to_numeric(ref_vals["itemid"], errors="coerce")
+                ref_vals["ref_range_lower"] = pd.to_numeric(ref_vals["ref_range_lower"], errors="coerce")
+                ref_vals["ref_range_upper"] = pd.to_numeric(ref_vals["ref_range_upper"], errors="coerce")
 
-                if row_ref.empty:
-                    chunk["result"] = ""
-                else:
-                    low = row_ref["ref_range_lower"].iloc[0]
-                    high = row_ref["ref_range_upper"].iloc[0]
+                ref_vals_1 = (ref_vals
+                    .dropna(subset=["itemid"])
+                    .groupby("itemid", as_index=False)
+                    .agg(ref_range_lower=("ref_range_lower", "min"),
+                    ref_range_upper=("ref_range_upper", "max"))
+                    )
 
-                    if pd.notna(low) and chunk["valuenum"] < low:
-                        chunk["result"] = "LOW"
-                    elif pd.notna(high) and chunk["valuenum"] > high:
-                        chunk["result"] = "HIGH"
-                    else:
-                        chunk["result"] = "NORMAL"
+                chunk = chunk.merge(
+                ref_vals_1,
+                on="itemid",
+                how="left",
+                validate="m:1"
+                )
 
-                chunk["result"] = chunk["flag"]
+                low = chunk["ref_range_lower"]
+                high = chunk["ref_range_upper"]
+                v = chunk["valuenum"]
 
-                chunk = chunk.rename(columns={
-                    "charttime": "timestamp",
-                    "valuenum": "value_num",
-                    "value": "value_text",
-                    "valueuom": "unit"
-                })
+                chunk["result"] = np.select(
+                [
+                low.notna() & v.notna() & (v < low),
+                high.notna() & v.notna() & (v > high),
+                ],
+                ["LOW", "HIGH"],
+                default="NORMAL"
+                )
+
+                no_ref = low.isna() & high.isna()
+                chunk.loc[no_ref, "result"] = ""
 
                 lab_events = chunk[[
                     "subject_id", "timestamp", "event_type", "event_value",
