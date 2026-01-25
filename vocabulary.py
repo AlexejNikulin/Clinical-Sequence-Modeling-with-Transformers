@@ -459,7 +459,31 @@ class Vocabulary:
             return self.death_vocab[token]
         # If unknown, map to UNK id
         return self.special_vocab[self.UNK]
-   
+    
+    def id_to_token(self, token_id: int) -> str:
+        """
+        Convert token ID back to token string.
+        Falls unbekannt: [UNK]
+        """
+
+        for vocab in (
+            self.special_vocab,
+            self.time_vocab,
+            self.dem_gen_vocab,
+            self.dem_age_vocab,
+            self.admission_vocab,
+            self.diagnosis_vocab,
+            self.labevents_vocab,
+            self.medication_vocab,
+            self.readmission_vocab,
+            self.death_vocab,
+        ):
+            inv = {v: k for k, v in vocab.items()}
+            if token_id in inv:
+                return inv[token_id]
+
+        return self.UNK
+    
     def get_unknown_token(self) -> str:
         return self.UNK
    
