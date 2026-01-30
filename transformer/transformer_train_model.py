@@ -454,6 +454,7 @@ class TransformerTrainer:
                         }
                     )
 
+        os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
         torch.save(model.state_dict(), checkpoint_path)
 
         print("\nTraining finished.")

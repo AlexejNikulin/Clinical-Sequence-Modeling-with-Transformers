@@ -405,6 +405,29 @@ class Vocabulary:
             if event == EventType.DEATH:
                 return self.death_vocab
             return None
+        
+    def vocab_name_for_token(self, token: str) -> Optional[str]:
+        if token in self.special_vocab:
+            return "special"
+        if token in self.time_vocab:
+            return "time"
+        if token in self.dem_gen_vocab:
+            return "demographic_gender"
+        if token in self.dem_age_vocab:
+            return "demographic_age"
+        if token in self.admission_vocab:
+            return "admission"
+        if token in self.diagnosis_vocab:
+            return "diagnosis"
+        if token in self.labevents_vocab:
+            return "labevents"
+        if token in self.medication_vocab:
+            return "medication"
+        if token in self.readmission_vocab:
+            return "readmission"
+        if token in self.death_vocab:
+            return "death"
+        return None
        
     # -------------------------
     # Requested: row -> token, fallback to global UNK if missing
