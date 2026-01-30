@@ -22,6 +22,7 @@ class PatientLevelEventExtractor:
         self.DLABITEMS_CSV  = self.DATA_DIR / "d_labitems.csv"
         self.EMAR_CSV       = self.DATA_DIR / "emar.csv"
         self.EMAR_DETAIL_CSV       = self.DATA_DIR / "emar_detail.csv"
+        self.OMR            = self.DATA_DIR / "omr.csv"
 
         self.REF_VAL_CSV = self.REF_VAL_DIR / "ref_ranges.csv"
 
@@ -57,7 +58,7 @@ class PatientLevelEventExtractor:
         events_dynamic = events_dynamic.sort_values(["subject_id", "timestamp", "event_type"], kind="mergesort")
 
         outfile = Path(str(self.OUT_DYNAMIC) + file_suffix + ".csv")
-        events_dynamic.to_csv(outfile, index=False)
+        events_dynamic.to_csv(outfile, index=False, date_format="%Y-%m-%d %H:%M:%S")
 
         print("Wrote:", outfile, "rows:", len(events_dynamic))
         print("\nCounts by event_type:")
@@ -213,8 +214,6 @@ class PatientLevelEventExtractor:
 
                 print(f"Chunk {i} processed and appended. Rows: {len(lab_events)}")
 
-        print("Processing complete.")
-
         # ------------------------
 
         meds_detail = pd.read_csv(self.EMAR_DETAIL_CSV, usecols=["emar_id", "pharmacy_id", "dose_given", "dose_given_unit"])
@@ -253,34 +252,48 @@ class PatientLevelEventExtractor:
 
         # ------------------------
 
-        # BASE_COLS = ["subject_id","timestamp","event_type","event_value","value_num","value_text","unit","source"]
+        omr = pd.read_csv(self.OMR, nrows=self.ROWS)
 
-        # def to_base(df):
-        #     # aggiunge colonne mancanti
-        #     for c in ["value_num", "value_text", "unit"]:
-        #         if c not in df.columns:
-        #             df[c] = pd.NA
-        #     return df[BASE_COLS]
+        omr["timestamp"] = pd.to_datetime(
+            omr["chartdate"].astype(str) + " 00:00:00",
+            errors="coerce"
+        )
 
-        # adm_base  = to_base(adm_events)   # già ha timestamp, event_type/value/source
-        # dis_base  = to_base(dis_events)
-        # diag_base = to_base(diag_events)
-        # lab_base  = to_base(lab_events)   # già ha value_num/value_text/unit
-        # med_base  = to_base(med_events)
+        omr_events = omr[[
+            "subject_id",
+            "timestamp",
+            "seq_num",
+            "result_name",
+            "result_value"
+        ]].copy()
 
-        # ------------------------
+        omr_events = omr_events[omr_events["result_name"] != "Height (Inches)"]
 
-        # df = pd.read_csv("events_dynamic.csv")
-        # df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-        # df = df.dropna(subset=["timestamp"])
+        weight_mask = omr_events["result_name"] == "Weight (Lbs)"
 
-        # seq_len = df.groupby("subject_id").size()  # numero eventi per paziente
+        omr_events.loc[weight_mask, "result_value"] = (
+            pd.to_numeric(
+                omr_events.loc[weight_mask, "result_value"],
+                errors="coerce"
+            )
+            * 0.45359237
+        ).round(0).astype("Int64")
 
-        # print("N patients:", seq_len.shape[0])
-        # print("Mean events/patient:", seq_len.mean())
-        # print("Median:", seq_len.median())
-        # print("Min:", seq_len.min(), "Max:", seq_len.max())
+        omr_events.loc[weight_mask, "result_name"] = "Weight (kg)"
 
-        # seq_len.describe()
+        omr_events["event_type"] = 5
+        omr_events["event_value"] = omr_events["result_name"].map(self.sanitize_token)
+        omr_events["result"] = omr_events["result_value"].astype(str)
 
+        omr_events = omr_events.sort_values(
+            ["subject_id", "timestamp", "seq_num"],
+            kind="mergesort"
+        )
 
+        print("OMR rows:", len(omr_events))
+        omr_events.head()
+
+        self.save_events_dynamic(
+            omr_events[["subject_id", "timestamp", "event_type", "event_value", "result"]],
+            "omr"
+        )
