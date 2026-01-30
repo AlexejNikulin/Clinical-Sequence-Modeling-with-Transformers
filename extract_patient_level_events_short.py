@@ -273,7 +273,6 @@ class PatientLevelEventExtractor_Short:
         omr_events = omr_events[omr_events["result_name"] != "Height (Inches)"]
 
         weight_mask = omr_events["result_name"] == "Weight (Lbs)"
-
         omr_events.loc[weight_mask, "result_value"] = (
             pd.to_numeric(
                 omr_events.loc[weight_mask, "result_value"],
@@ -287,6 +286,34 @@ class PatientLevelEventExtractor_Short:
         omr_events["event_type"] = 5
         omr_events["event_value"] = omr_events["result_name"].map(self.sanitize_token)
         omr_events["result"] = omr_events["result_value"].astype(str)
+
+        omr_events = omr_events.sort_values(
+            ["subject_id", "timestamp", "seq_num"],
+            kind="mergesort"
+        )
+
+        def map_omr_type(ev: str) -> str:
+            if isinstance(ev, str):
+                if ev.startswith("WEIGHT"):
+                    return "WEIGHT"
+                if ev.startswith("BMI"):
+                    return "BMI"
+                if ev.startswith("BLOOD_PRESSURE"):
+                    return "BLOOD_PRESSURE"
+            return "OTHER"
+
+        omr_events["omr_type"] = omr_events["event_value"].map(map_omr_type)
+
+        dedupe_mask = omr_events["omr_type"].isin(["WEIGHT", "BMI", "BLOOD_PRESSURE"])
+
+        to_dedupe = omr_events[dedupe_mask].drop_duplicates(
+            subset=["subject_id", "timestamp", "omr_type"],
+            keep="first"
+        )
+        rest = omr_events[~dedupe_mask]
+
+        omr_events = pd.concat([to_dedupe, rest], ignore_index=True)
+        omr_events = omr_events.drop(columns=["omr_type"])
 
         omr_events = omr_events.sort_values(
             ["subject_id", "timestamp", "seq_num"],
