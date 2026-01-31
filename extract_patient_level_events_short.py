@@ -99,7 +99,7 @@ class PatientLevelEventExtractor_Short:
 
         # ------------------------
 
-        diag = pd.read_csv(self.DIAGNOSES_CSV, usecols=["subject_id", "hadm_id", "icd_code", "icd_version"], nrows=self.ROWS)
+        diag = pd.read_csv(self.DIAGNOSES_CSV, usecols=["subject_id", "hadm_id", "icd_code", "icd_version", "seq_num"], nrows=self.ROWS)
 
         diag_icd10 = diag[diag["icd_version"] == 10].copy()
         diag_icd9 = diag[diag["icd_version"] == 9].copy()
@@ -110,7 +110,7 @@ class PatientLevelEventExtractor_Short:
         diag_icd10["event_type"]  = 2
         diag_icd10["event_value"] = diag_icd10["icd_code"].map(lambda c: f"10_{self.sanitize_token(c)}")
         diag_icd10["result"]      = ""
-        diag10_events = diag_icd10[["subject_id", "timestamp", "event_type", "event_value", "result"]]
+        diag10_events = diag_icd10[["subject_id", "timestamp", "event_type", "event_value", "result", "hadm_id", "seq_num"]]
 
         # proxy timestamp from admissions dischtime
         diag_icd9["timestamp"] = diag_icd9["hadm_id"].map(hadm_to_dischtime) 
@@ -121,6 +121,11 @@ class PatientLevelEventExtractor_Short:
         diag9_events = diag_icd9[["subject_id", "timestamp", "event_type", "event_value", "result"]]
 
         diag_events = pd.concat([diag10_events, diag9_events], ignore_index=True)
+
+        diag_events["timestamp"] -= pd.Timedelta(seconds=1) # Diagnosis timestamp -1 second so the readmission/discharge is always last in the sequence
+
+        diag_events = diag_events.sort_values(by=["hadm_id", "seq_num"], kind="mergesort").reset_index(drop=True)
+        diag_events = diag_events[["subject_id", "timestamp", "event_type", "event_value", "result"]]
 
         print("DIAG rows:", len(diag_events))
         diag_events.head()
@@ -233,7 +238,12 @@ class PatientLevelEventExtractor_Short:
         lookup_dict = meds_detail["result"].to_dict()
         del meds_detail
 
-        meds = pd.read_csv(self.EMAR_CSV, usecols=["subject_id", "emar_id", "charttime", "medication"], nrows=self.ROWS)
+        meds = pd.read_csv(self.EMAR_CSV, usecols=["subject_id", "emar_id", "charttime", "medication", "event_txt"], nrows=self.ROWS)
+                
+        meds = meds[meds["event_txt"].notna() & ~meds["event_txt"].isin(['Not Applied', 'Not Given', 'Hold Dose', 'Not Flushed', 'Not Given per Sliding Scale', 'Not Confirmed', 'Not Started', 'Infusion Reconciliation Not Done', 'Not Stopped per Sliding Scale', 'Not Assessed', 'Pain score re-assess not done', 'TPN Rate Not Changed', 'Delayed Not Applied', 'Delayed Not Flushed', 'Delayed Not Removed', 'Not Started per Sliding Scale', 'Not Read' , 'Delayed Not Started', 'Delayed Not Confirmed', 'Delayed Not Assessed'])
+]
+        meds = meds.drop(columns=["event_txt"])
+    
         meds["charttime"] = self.to_dt(meds["charttime"])
         meds = meds.dropna(subset=["charttime"])
 
