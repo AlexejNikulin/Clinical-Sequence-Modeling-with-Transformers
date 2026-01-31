@@ -4,10 +4,18 @@ Docstring für evaluation.next_event_eval
 PATH: 
     python -m evaluation.next_event_eval \
         --jsonl data/eval.jsonl \
-        --ckpt checkpoints/mlm_best.pt \
+        --ckpt checkpoints/mlm_d384.pt \
         --topk 1,5,10
 
+    python -m evaluation.next_event_eval \
+        --jsonl data/eval.jsonl \
+        --ckpt checkpoints/mlm_recency.pt \
+        --topk 1,5,10
 
+    python -m evaluation.next_event_eval \
+        --jsonl data/eval.jsonl \
+        --ckpt checkpoints/mlm_span.pt \
+        --topk 1,5,10   
 '''
 
 
@@ -16,29 +24,25 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Tuple
 
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-
-# -------------------------------------------------
-# Ensure repo root is importable so "transformer" works.
-# -------------------------------------------------
+# Ensure repo root is importable : Ensure repo root is importable so "transformer" works.
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-
-from evaluation.clinical_eval_utils import (  # noqa: E402
+from evaluation.clinical_eval_utils import (
     IGNORE_INDEX,
     ClinicalSequenceDataset,
     TopKResult,
     load_jsonl,
     topk_accuracy_from_logits,
 )
-from compact_transformer_encoder import (  # noqa: E402
+from compact_transformer_encoder import (
     CompactTransformerConfig,
     CompactTransformerEncoder,
 )

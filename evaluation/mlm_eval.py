@@ -1,24 +1,40 @@
 '''
 Docstring for evaluation.mlm_eval
 
+ls -la data/eval.jsonl
+ls -la data | head
+find . -maxdepth 4 -name "eval.jsonl" -print
+
+
 PATH: 
     Token masking:
         python -m evaluation.mlm_eval \
-        --jsonl data/eval.jsonl \
-        --ckpt checkpoints/mlm_best.pt \
-        --p_mlm 0.15 \
-        --strategy token \
-        --topk 1,5,10
+            --jsonl data/eval.jsonl \
+            --ckpt checkpoints/mlm_d384.pt \
+            --p_mlm 0.15 \
+            --strategy token \
+            --topk 1,5,10 2>&1 | tee /tmp/mlm_eval_err.txt
+            tail -n 80 /tmp/mlm_eval_err.txt
+
+
+        python -m evaluation.mlm_eval \
+            --jsonl data/eval.jsonl \
+            --ckpt checkpoints/mlm_recency.pt \
+            --p_mlm 0.15 \
+            --strategy token \
+            --topk 1,5,10
+
+       
 
     span masking:     
         python -m evaluation.mlm_eval \
-        --jsonl data/eval.jsonl \
-        --ckpt checkpoints/mlm_best.pt \
-        --p_mlm 0.15 \
-        --strategy token \
-        --topk 1,5,10
+            --jsonl data/eval.jsonl \
+            --ckpt checkpoints/mlm_span.pt \
+            --p_mlm 0.15 \
+            --strategy token \
+            --topk 1,5,10
         
-
+   
 
 
 '''
@@ -28,35 +44,37 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+import warnings
+warnings.filterwarnings(
+    "ignore",
+    message="The PyTorch API of nested tensors is in prototype stage*",
+)
 
 
-# -------------------------------------------------
-# Ensure repo root is importable so "transformer" works.
-# This must run BEFORE importing from transformer.*
-# -------------------------------------------------
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-
-from evaluation.clinical_eval_utils import (  # noqa: E402
+from clinical_eval_utils import (
     IGNORE_INDEX,
     ClinicalSequenceDataset,
     TopKResult,
     load_jsonl,
-    masking_policy_expected_corruption,
     topk_accuracy_from_logits,
+    masking_policy_expected_corruption,
 )
-from mlm_masking import mlm_mask_801010, mlm_mask_span_801010  # noqa: E402
-from compact_transformer_encoder import (  # noqa: E402
+from mlm_masking import mlm_mask_801010, mlm_mask_span_801010
+from compact_transformer_encoder import (
     CompactTransformerConfig,
     CompactTransformerEncoder,
 )
+
+
 
 
 def _extract_logits(model_out: Any) -> torch.Tensor:

@@ -11,15 +11,21 @@ from torch.utils.data import Dataset
 IGNORE_INDEX = -100
 
 
-def load_jsonl(path: str) -> List[Dict[str, Any]]:
-    data: List[Dict[str, Any]] = []
+def load_jsonl(path: str):
+    data = []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
+            if line.startswith("#"):
+                # allow comment lines like "# ..." or "# {...}"
+                line = line.lstrip("#").lstrip("£").strip()
+                if not line:
+                    continue
             data.append(json.loads(line))
     return data
+
 
 
 def build_joint_sequences(
@@ -72,11 +78,18 @@ def build_joint_sequences(
 
 
 class ClinicalSequenceDataset(Dataset):
-    """Dataset for evaluation/training where each JSONL record provides token lists.
+    """
+    Dataset for evaluation/training.   ---> keys: ['patient_id', 'token_ids']
 
-    Expected fields per record:
-      - demo_tokens: List[int]
-      - event_tokens: List[int]
+    Supports two JSONL formats:
+
+    A) Flat sequence:
+        - token_ids: List[int]
+        (optional) event_type_ids: List[int]  # if you have it; otherwise we auto-fill zeros
+
+    B) Split sequences:
+        - demo_tokens: List[int]
+        - event_tokens: List[int]
     """
 
     def __init__(
@@ -85,19 +98,55 @@ class ClinicalSequenceDataset(Dataset):
         *,
         max_len: int,
         pad_id: int,
+        token_key: str = "token_ids",
+        event_type_key: Optional[str] = None,
         demo_key: str = "demo_tokens",
         event_key: str = "event_tokens",
+        has_split_fields: Optional[bool] = None,
     ) -> None:
-        demographics = [r[demo_key] for r in records]
-        events = [r[event_key] for r in records]
+        if len(records) == 0:
+            raise ValueError("records is empty")
 
-        input_ids, attn, seg = build_joint_sequences(
-            demographics=demographics,
-            events=events,
-            max_len=max_len,
-            pad_id=pad_id,
-            sep_id=None,
-        )
+        # Auto-detect format if not specified
+        if has_split_fields is None:
+            r0 = records[0]
+            has_split_fields = (demo_key in r0 and event_key in r0)
+
+        if has_split_fields:
+            demographics = [r[demo_key] for r in records]
+            events = [r[event_key] for r in records]
+            input_ids, attn, seg = build_joint_sequences(
+                demographics=demographics,
+                events=events,
+                max_len=max_len,
+                pad_id=pad_id,
+                sep_id=None,
+            )
+        else:
+            # Flat sequences: token_ids
+            input_ids = []
+            attn = []
+            seg = []
+            for r in records:
+                seq = list(r[token_key])
+                seq = seq[:max_len]
+                a = [1] * len(seq)
+
+                while len(seq) < max_len:
+                    seq.append(pad_id)
+                    a.append(0)
+
+                input_ids.append(seq)
+                attn.append(a)
+
+                # event_type_ids if present, else zeros
+                if event_type_key is not None and event_type_key in r:
+                    s = list(r[event_type_key])[:max_len]
+                    while len(s) < max_len:
+                        s.append(0)
+                else:
+                    s = [0] * max_len
+                seg.append(s)
 
         self.input_ids = input_ids
         self.attention_mask = attn

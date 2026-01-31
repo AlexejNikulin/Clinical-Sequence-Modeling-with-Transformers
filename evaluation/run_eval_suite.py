@@ -1,11 +1,16 @@
 '''
-Docstring for evaluation.run_eval_suite. 
+Docstring for evaluation.run_eval_suite ---> it's work :
+                                                    MLM Token masking
+                                                    MLM Span masking
+                                                    Next-event prediction
 
-PATH: 
+USE PATH: 
+
+ MLM eval: token masking: 
 
     python -m evaluation.run_eval_suite \
         --jsonl data/eval.jsonl \
-        --ckpt checkpoints/mlm_best.pt \
+        --ckpt checkpoints/mlm_recency.pt \
         --batch_size 32 \
         --max_len 128 \
         --pad_id 0 \
@@ -13,16 +18,19 @@ PATH:
         --p_mlm 0.15 \
         --topk 1,5,10
 
+# MLM eval: span masking:
 
+    python -m evaluation.run_eval_suite \
+        --jsonl data/eval.jsonl \
+        --ckpt checkpoints/mlm_span.pt \
+        --batch_size 32 \
+        --max_len 128 \
+        --pad_id 0 \
+        --mask_id 1 \
+        --p_mlm 0.15 \
+        --topk 1,5,10
 
 '''
-
-
-
-
-
-
-
 from __future__ import annotations
 
 import argparse
@@ -33,6 +41,8 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 import torch
 from torch.utils.data import DataLoader
 
+from evaluation.mlm_eval import run_mlm_eval
+
 
 # -------------------------------------------------
 # Ensure repo root is importable so "transformer" works.
@@ -41,15 +51,35 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
+import warnings
+warnings.filterwarnings(
+    "ignore",
+    message="The PyTorch API of nested tensors is in prototype stage*",
+)
 
-from evaluation.clinical_eval_utils import (  # noqa: E402
+from evaluation.clinical_eval_utils import (
+    IGNORE_INDEX,
+    ClinicalSequenceDataset,
+    TopKResult,
+    load_jsonl,
+    topk_accuracy_from_logits,
+    masking_policy_expected_corruption,
+)
+from mlm_masking import mlm_mask_801010, mlm_mask_span_801010
+from compact_transformer_encoder import (
+    CompactTransformerConfig,
+    CompactTransformerEncoder,
+)
+
+
+from evaluation.clinical_eval_utils import ( 
     ClinicalSequenceDataset,
     load_jsonl,
     masking_policy_expected_corruption,
 )
-from evaluation.mlm_eval import run_mlm_eval  # noqa: E402
-from evaluation.next_event_eval import run_next_event_eval  # noqa: E402
-from compact_transformer_encoder import (  # noqa: E402
+
+from evaluation.next_event_eval import run_next_event_eval 
+from compact_transformer_encoder import (
     CompactTransformerConfig,
     CompactTransformerEncoder,
 )
@@ -158,7 +188,7 @@ def main() -> None:
         print(f"top{k}={ne[f'top{k}']:.4f}")
 
     print(
-        "\nMortality downstream probe: use downstream/mortality_train.py (linear probe via --freeze_encoder)."
+        "\nMortality downstream probe: use downstream --> mortality_train.py (linear probe via --freeze_encoder)."
     )
 
 
