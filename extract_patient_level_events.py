@@ -169,8 +169,7 @@ class PatientLevelEventExtractor:
         with pd.read_csv(
             self.LABEVENTS_CSV,
             usecols=["subject_id", "charttime", "itemid", "valuenum", "value"],
-            chunksize=1_000_000,
-            nrows=self.ROWS
+            chunksize=1_000_000
         ) as reader:
 
             for i, chunk in enumerate(reader):

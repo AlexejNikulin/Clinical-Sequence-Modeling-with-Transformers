@@ -180,12 +180,12 @@ class Vocabulary:
     START_ADM: int = 150
     START_DIAG: int = 170
     START_LABEV: int = 27000
-    START_MED: int = 29000
-    START_OMR_BMI: int = 56000
-    START_OMR_WEIGHT: int = 56500
-    START_OMR_BLOOD_PRES: int = 56650
-    START_DISCH: int = 70000
-    START_DEATH: int = 70010
+    START_MED: int = 31000
+    START_OMR_BMI: int = 58000
+    START_OMR_WEIGHT: int = 60000
+    START_OMR_BLOOD_PRES: int = 63000
+    START_DISCH: int = 77000
+    START_DEATH: int = 77010
  
     # Next free IDs per block
     _next_special: int = START_SPECIAL
@@ -348,11 +348,11 @@ class Vocabulary:
         if "event_type" not in df.columns:
             raise ValueError("DataFrame missing required column: 'event_type'")
 
-        for _, row in tqdm(df.iterrows(), total=df.shape[0]):
+        stream = df[["event_type", "event_value", "result"]].itertuples(index=False, name=None)
+        for row_tuple in tqdm(stream, total=len(df), desc="Streaming Vocab"):
 
             # --- robust event_type parsing ---
-            raw_event = row["event_type"]
-
+            raw_event = row_tuple[0]
             if pd.isna(raw_event):
                 continue
 
@@ -360,6 +360,12 @@ class Vocabulary:
                 event = int(raw_event)
             except (ValueError, TypeError):
                 event = raw_event
+            
+            row = {
+                "event_type": raw_event,
+                "event_value": row_tuple[1],
+                "result": row_tuple[2]
+            }
 
             # ---------------------------------
             token = self.token_converter.convert_row_to_token_seq(row)
@@ -372,19 +378,19 @@ class Vocabulary:
 
             self._add_token(vocab, token, event)
 
-            # ===============================
-            # SORT ALL VOCABS (except special and time)
-            # ===============================
-            self.time_vocab        = self._sort_vocab(self.time_vocab,        self.START_TIME)
-            self.dem_gen_vocab     = self._sort_vocab(self.dem_gen_vocab,     self.START_DEM_GEN)
-            self.dem_age_vocab     = self._sort_vocab(self.dem_age_vocab,     self.START_DEM_AGE)
-            self.dem_race_vocab    = self._sort_vocab(self.dem_race_vocab,    self.START_DEM_RACE)
-            self.admission_vocab   = self._sort_vocab(self.admission_vocab,   self.START_ADM)
-            self.diagnosis_vocab   = self._sort_vocab(self.diagnosis_vocab,   self.START_DIAG)
-            self.labevents_vocab   = self._sort_vocab(self.labevents_vocab,   self.START_LABEV)
-            self.medication_vocab  = self._sort_vocab(self.medication_vocab,  self.START_MED)
-            self.discharge_vocab   = self._sort_vocab(self.discharge_vocab,   self.START_DISCH)
-            self.death_vocab       = self._sort_vocab(self.death_vocab,       self.START_DEATH)
+        # ===============================
+        # SORT ALL VOCABS (except special and time)
+        # ===============================
+        self.time_vocab        = self._sort_vocab(self.time_vocab,        self.START_TIME)
+        self.dem_gen_vocab     = self._sort_vocab(self.dem_gen_vocab,     self.START_DEM_GEN)
+        self.dem_age_vocab     = self._sort_vocab(self.dem_age_vocab,     self.START_DEM_AGE)
+        self.dem_race_vocab    = self._sort_vocab(self.dem_race_vocab,    self.START_DEM_RACE)
+        self.admission_vocab   = self._sort_vocab(self.admission_vocab,   self.START_ADM)
+        self.diagnosis_vocab   = self._sort_vocab(self.diagnosis_vocab,   self.START_DIAG)
+        self.labevents_vocab   = self._sort_vocab(self.labevents_vocab,   self.START_LABEV)
+        self.medication_vocab  = self._sort_vocab(self.medication_vocab,  self.START_MED)
+        self.discharge_vocab   = self._sort_vocab(self.discharge_vocab,   self.START_DISCH)
+        self.death_vocab       = self._sort_vocab(self.death_vocab,       self.START_DEATH)
         self._sort_omr_vocabs_by_value()
  
     # -------------------------
