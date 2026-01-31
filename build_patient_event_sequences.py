@@ -29,18 +29,18 @@ class EventSequencer():
         }
 
         self.TIME_GAP_BINS = [
-        (0.0,       1/24,     "<1h", 0), #≤1h
-        (1/24,      3/24,     "1-3h", 1), #1–3h
-        (3/24,      12/24,    "3-12h", 2), #3–12h
-        (12/24,     1.0,      "12-24h", 3), #12–24h
-        (1.0,       3.0,      "1-3d", 4), #1–3d
-        (3.0,       7.0,      "3-7d", 5), #3–7d
-        (7.0,       28.0,     "1-4w", 6), #1–4w
-        (28.0,      90.0,     "1-3mo", 7), #1–3mo
-        (90.0,      365.0,    "3-12mo", 8), #3–12mo
-        (365.0,     1095.0,   "1-3y", 9), #1-3y
-        (1095.0,    36500.0, "3-100y", 10), #3-100y
-        (36500.0,   float("inf"), ">100y", 11) #<100y mainly to catch the differnce between Dem events and other ones
+        (0.0,       1/24,     "<1h"), #≤1h
+        (1/24,      3/24,     "1_1-3h"), #1–3h
+        (3/24,      12/24,    "2_3-12h"), #3–12h
+        (12/24,     1.0,      "3_12-24h"), #12–24h
+        (1.0,       3.0,      "4_1-3d"), #1–3d
+        (3.0,       7.0,      "5_3-7d"), #3–7d
+        (7.0,       28.0,     "6_1-4w"), #1–4w
+        (28.0,      90.0,     "7_1-3mo"), #1–3mo
+        (90.0,      365.0,    "8_3-12mo"), #3–12mo
+        (365.0,     1095.0,   "9_1-3y"), #1-3y
+        (1095.0,    36500.0, "10_3-100y"), #3-100y
+        (36500.0,   float("inf"), "11_>100y") #<100y mainly to catch the differnce between Dem events and other ones
         ]
 
     def build_patient_event_sequences(
@@ -82,9 +82,9 @@ class EventSequencer():
         return sequences
 
     def categorize_time_gap(self, gap_days: float) -> str:
-        for lower, upper, label, value in self.TIME_GAP_BINS:
+        for lower, upper, label in self.TIME_GAP_BINS:
             if lower <= gap_days <= upper:
-                return label, value
+                return label
         return "unknown"
 
     
@@ -105,19 +105,18 @@ class EventSequencer():
             if(row["event_type"] != "TIME"):
                 if(previous_event_type != "DEM"):
                     if previous_subject != current_subject:
-                        gap_category = "start"
+                        gap_category = "0_start"
                         previous_timestamp = None
                     else:
                         gap_days = (current_timestamp.to_pydatetime() - previous_timestamp.to_pydatetime()).total_seconds() / 86400
                         gap_category = self.categorize_time_gap(gap_days)
 
-                    if gap_category[0] not in ["<1h"]:
+                    if gap_category not in ["<1h"]:
                         rows.append({
                             "subject_id": current_subject,
                             "timestamp": current_timestamp.to_pydatetime() - pd.Timedelta(seconds=1),
                             "event_type": "TIME",
-                            "event_value": gap_category[0],
-                            "event_category": gap_category[1]
+                            "event_value": gap_category
                         })
 
                 rows.append(row.to_dict())

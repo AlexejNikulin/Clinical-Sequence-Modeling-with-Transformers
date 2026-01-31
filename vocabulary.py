@@ -113,7 +113,7 @@ class TokenConverter:
         return "[DEM_RACE_OTHER]"
     
     def time_to_token(self, event_value: str) -> str:
-        return f"[TIME_CAT_{event_value}]"
+        return f"[TIME_CAT{event_value}]"
  
     def disch_to_token(self, dis_type) -> str:
         return f"[DISCH_{dis_type}]"
@@ -374,6 +374,7 @@ class Vocabulary:
             # ===============================
             # SORT ALL VOCABS (except special and time)
             # ===============================
+            self.time_vocab        = self._sort_vocab(self.time_vocab,        self.START_TIME)
             self.dem_gen_vocab     = self._sort_vocab(self.dem_gen_vocab,     self.START_DEM_GEN)
             self.dem_age_vocab     = self._sort_vocab(self.dem_age_vocab,     self.START_DEM_AGE)
             self.dem_race_vocab    = self._sort_vocab(self.dem_race_vocab,    self.START_DEM_RACE)
