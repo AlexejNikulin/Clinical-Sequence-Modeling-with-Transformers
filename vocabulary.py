@@ -68,7 +68,7 @@ class TokenConverter:
  
         elif event == EventType.DISCHARGE:
             dis_type = str(row["result"]).strip()
-            return self.readm_to_token(dis_type)
+            return self.disch_to_token(dis_type)
  
         elif event == EventType.DEATH:
             return self.death_to_token()
@@ -110,8 +110,8 @@ class TokenConverter:
     def time_to_token(self, event_value: str) -> str:
         return f"[TIME_CAT_{event_value}]"
  
-    def readm_to_token(self, dis_type) -> str:
-        return f"[READM_{dis_type}]"
+    def disch_to_token(self, dis_type) -> str:
+        return f"[DISCH_{dis_type}]"
  
     def death_to_token(self) -> str:
         return "[DEATH]"
@@ -151,7 +151,7 @@ class Vocabulary:
     diagnosis_vocab: Dict[str, int] = field(default_factory=dict)
     labevents_vocab: Dict[str, int] = field(default_factory=dict)
     medication_vocab: Dict[str, int] = field(default_factory=dict)
-    readmission_vocab: Dict[str, int] = field(default_factory=dict)
+    discharge_vocab: Dict[str, int] = field(default_factory=dict)
     death_vocab: Dict[str, int] = field(default_factory=dict)
  
     # Special tokens (global)
@@ -169,7 +169,7 @@ class Vocabulary:
     START_DIAG: int = 170
     START_LABEV: int = 27000
     START_MED: int = 29000
-    START_READM: int = 56000
+    START_DISCH: int = 56000
     START_DEATH: int = 56010
  
     # Next free IDs per block
@@ -182,7 +182,7 @@ class Vocabulary:
     _next_diag: int = START_DIAG
     _next_labev: int = START_LABEV
     _next_med: int = START_MED
-    _next_readm: int = START_READM
+    _next_disch: int = START_DISCH
     _next_death: int = START_DEATH
  
     def __init__(self, df = None):
@@ -201,7 +201,7 @@ class Vocabulary:
         self.diagnosis_vocab = {}
         self.labevents_vocab = {}
         self.medication_vocab = {}
-        self.readmission_vocab = {}
+        self.discharge_vocab = {}
         self.death_vocab = {}
 
         self._init_special_tokens()
@@ -221,7 +221,7 @@ class Vocabulary:
             "diagnosis": self.diagnosis_vocab,
             "labevents": self.labevents_vocab,
             "medication": self.medication_vocab,
-            "readmission": self.readmission_vocab,
+            "discharge": self.discharge_vocab,
             "death": self.death_vocab,
         }
         with open(path, "w", encoding="utf-8") as f:
@@ -247,7 +247,7 @@ class Vocabulary:
         vocab.diagnosis_vocab = {}
         vocab.labevents_vocab = {}
         vocab.medication_vocab = {}
-        vocab.readmission_vocab = {}
+        vocab.discharge_vocab = {}
         vocab.death_vocab = {}
 
         vocab._next_special = cls.START_SPECIAL
@@ -259,7 +259,7 @@ class Vocabulary:
         vocab._next_diag = cls.START_DIAG
         vocab._next_labev = cls.START_LABEV
         vocab._next_med = cls.START_MED
-        vocab._next_readm = cls.START_READM
+        vocab._next_disch = cls.START_DISCH
         vocab._next_death = cls.START_DEATH
 
         vocab.special_vocab = data["special"]
@@ -271,7 +271,7 @@ class Vocabulary:
         vocab.diagnosis_vocab = data["diagnosis"]
         vocab.labevents_vocab = data["labevents"]
         vocab.medication_vocab = data["medication"]
-        vocab.readmission_vocab = data["readmission"]
+        vocab.discharge_vocab = data["discharge"]
         vocab.death_vocab = data["death"]
 
         return vocab
@@ -292,7 +292,7 @@ class Vocabulary:
         self.diagnosis_vocab = data["diagnosis"]
         self.labevents_vocab = data["labevents"]
         self.medication_vocab = data["medication"]
-        self.readmission_vocab = data["readmission"]
+        self.discharge_vocab = data["discharge"]
         self.death_vocab = data["death"]
     
     # -------------------------
@@ -346,7 +346,7 @@ class Vocabulary:
             self.diagnosis_vocab   = self._sort_vocab(self.diagnosis_vocab,   self.START_DIAG)
             self.labevents_vocab   = self._sort_vocab(self.labevents_vocab,   self.START_LABEV)
             self.medication_vocab  = self._sort_vocab(self.medication_vocab,  self.START_MED)
-            self.readmission_vocab = self._sort_vocab(self.readmission_vocab, self.START_READM)
+            self.discharge_vocab   = self._sort_vocab(self.discharge_vocab,   self.START_DISCH)
             self.death_vocab       = self._sort_vocab(self.death_vocab,       self.START_DEATH)
  
     # -------------------------
@@ -414,17 +414,17 @@ class Vocabulary:
  
         elif event == EventType.MEDICATION:
             new_id = self._next_med
-            if new_id >= self.START_READM:
+            if new_id >= self.START_DISCH:
                 raise RuntimeError("Medication vocab exceeded allowed range.")
             vocab[token] = new_id
             self._next_med += 1
  
         elif event == EventType.DISCHARGE:
-            new_id = self._next_readm
+            new_id = self._next_disch
             if new_id >= self.START_DEATH:
-                raise RuntimeError("Readmission vocab exceeded allowed range.")
+                raise RuntimeError("Discharge vocab exceeded allowed range.")
             vocab[token] = new_id
-            self._next_readm += 1
+            self._next_disch += 1
  
         elif event == EventType.DEATH:
             new_id = self._next_death
@@ -461,7 +461,7 @@ class Vocabulary:
             if event == EventType.MEDICATION:
                 return self.medication_vocab
             if event == EventType.DISCHARGE:
-                return self.readmission_vocab
+                return self.discharge_vocab
             if event == EventType.DEATH:
                 return self.death_vocab
             return None
@@ -485,8 +485,8 @@ class Vocabulary:
             return "labevents"
         if token in self.medication_vocab:
             return "medication"
-        if token in self.readmission_vocab:
-            return "readmission"
+        if token in self.discharge_vocab:
+            return "discharge"
         if token in self.death_vocab:
             return "death"
         return None
@@ -540,8 +540,8 @@ class Vocabulary:
             return self.labevents_vocab[token]
         if token in self.medication_vocab:
             return self.medication_vocab[token]
-        if token in self.readmission_vocab:
-            return self.readmission_vocab[token]
+        if token in self.discharge_vocab:
+            return self.discharge_vocab[token]
         if token in self.death_vocab:
             return self.death_vocab[token]
         # If unknown, map to UNK id
@@ -563,7 +563,7 @@ class Vocabulary:
             self.diagnosis_vocab,
             self.labevents_vocab,
             self.medication_vocab,
-            self.readmission_vocab,
+            self.discharge_vocab,
             self.death_vocab,
         ):
             inv = {v: k for k, v in vocab.items()}
