@@ -135,90 +135,97 @@ class PatientLevelEventExtractor:
         # ------------------------
 
         # Lookup table for itemid <-> label
-        d_lab = pd.read_csv(self.DLABITEMS_CSV, usecols=["itemid", "label"])
-        d_lab["clean_label"] = d_lab["label"].apply(lambda x: f"{self.sanitize_token(x)}")
+        d_lab = pd.read_csv(
+            self.DLABITEMS_CSV,
+            usecols=["itemid", "label"],
+            nrows=self.ROWS
+        )
+        d_lab["clean_label"] = d_lab["label"].apply(
+            lambda x: self.sanitize_token(x)
+        )
         item_map = d_lab.set_index("itemid")["clean_label"].to_dict()
 
         output_file = Path(str(self.OUT_DYNAMIC) + "labevents.csv")
         print(f"Processing to: {output_file}")
 
-        # Process in chunks, as this file is 18GB large
+        # --- load reference values ONCE ---
+        ref_vals = pd.read_csv(self.REF_VAL_CSV)
+
+        ref_vals["itemid"] = pd.to_numeric(ref_vals["itemid"], errors="coerce")
+        ref_vals["ref_range_lower"] = pd.to_numeric(ref_vals["ref_range_lower"], errors="coerce")
+        ref_vals["ref_range_upper"] = pd.to_numeric(ref_vals["ref_range_upper"], errors="coerce")
+
+        ref_vals_agg = (
+            ref_vals
+            .dropna(subset=["itemid"])
+            .groupby("itemid", as_index=False)
+            .agg(
+                ref_range_lower=("ref_range_lower", "min"),
+                ref_range_upper=("ref_range_upper", "max")
+            )
+        )
+
+        # --- chunk processing ---
         with pd.read_csv(
             self.LABEVENTS_CSV,
-            usecols=["subject_id", "charttime", "itemid", "valuenum", "value", "valueuom", "flag"],
+            usecols=["subject_id", "charttime", "itemid", "valuenum", "value"],
             chunksize=1_000_000
         ) as reader:
-            
-            ref_vals = pd.read_csv(self.REF_VAL_CSV)
-            
+
             for i, chunk in enumerate(reader):
+
                 chunk["charttime"] = self.to_dt(chunk["charttime"])
                 chunk = chunk.dropna(subset=["charttime"])
-
                 chunk = chunk.rename(columns={"charttime": "timestamp"})
 
                 chunk["event_type"] = 3
                 chunk["event_value"] = chunk["itemid"].map(item_map)
 
-                # Fallback for unknown IDs
-                mask_unknown = chunk["event_value"].isna()
-                if mask_unknown.any():
-                    chunk.loc[mask_unknown, "event_value"] = "UNK"
-
-                # --- ensure numeric ---
-                ref_vals["itemid"] = pd.to_numeric(ref_vals["itemid"], errors="coerce")
-                ref_vals["ref_range_lower"] = pd.to_numeric(ref_vals["ref_range_lower"], errors="coerce")
-                ref_vals["ref_range_upper"] = pd.to_numeric(ref_vals["ref_range_upper"], errors="coerce")
-
-                ref_vals_1 = (ref_vals
-                    .dropna(subset=["itemid"])
-                    .groupby("itemid", as_index=False)
-                    .agg(ref_range_lower=("ref_range_lower", "min"),
-                    ref_range_upper=("ref_range_upper", "max"))
-                    )
-
+                # --- merge reference ranges ---
                 chunk = chunk.merge(
-                ref_vals_1,
-                on="itemid",
-                how="left",
-                validate="m:1"
+                    ref_vals_agg,
+                    on="itemid",
+                    how="left",
+                    validate="m:1"
                 )
 
                 low = chunk["ref_range_lower"]
                 high = chunk["ref_range_upper"]
-                v = chunk["valuenum"]
+                vnum = chunk["valuenum"]
+                vtxt = chunk["value"].astype(str).str.strip()
 
+                # --- numeric classification ---
                 chunk["result"] = np.select(
-                [
-                low.notna() & v.notna() & (v < low),
-                high.notna() & v.notna() & (v > high),
-                ],
-                ["LOW", "HIGH"],
-                default="NORMAL"
+                    [
+                        low.notna() & vnum.notna() & (vnum < low),
+                        high.notna() & vnum.notna() & (vnum > high),
+                        low.notna() & high.notna() & vnum.notna(),
+                    ],
+                    ["LOW", "HIGH", "NORMAL"],
+                    default=""
                 )
 
+                # --- fallback: no ref-range but qualitative value ---
                 no_ref = low.isna() & high.isna()
-                chunk.loc[no_ref, "result"] = ""
+                has_value = vtxt.notna() & (vtxt != "") & (vtxt != "nan")
 
-                lab_events = chunk[[
-                    "subject_id", "timestamp", "event_type", "event_value",
-                    # "value_num", "value_text", "unit", # unused right now, would have to be merged into event_value to not break the scripts
-                    "result"
-                ]]
+                chunk.loc[no_ref & has_value, "result"] = vtxt
 
-                write_mode = 'w' if i == 0 else 'a' # write / append
+                lab_events = chunk[
+                    ["subject_id", "timestamp", "event_type", "event_value", "result"]
+                ]
+
+                write_mode = "w" if i == 0 else "a"
                 write_header = (i == 0)
 
                 lab_events.to_csv(
-                    output_file, 
-                    mode=write_mode, 
-                    header=write_header, 
+                    output_file,
+                    mode=write_mode,
+                    header=write_header,
                     index=False
                 )
 
-                print(f"Chunk {i} processed and appended. Rows: {len(lab_events)}")
-
-        print("Processing complete.")
+                print(f"Chunk {i} processed. Rows written: {len(lab_events)}")
 
         # ------------------------
 

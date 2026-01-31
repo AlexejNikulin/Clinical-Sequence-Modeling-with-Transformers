@@ -117,7 +117,7 @@ class PatientLevelEventExtractor_Short:
         diag_icd9["event_type"]  = 2
         diag_icd9["event_value"] = diag_icd9["icd_code"].map(lambda c: f"9_{self.sanitize_token(c)}")
         diag_icd9["result"]      = ""
-        diag9_events = diag_icd9[["subject_id", "timestamp", "event_type", "event_value", "result"]]
+        diag9_events = diag_icd9[["subject_id", "timestamp", "event_type", "event_value", "result", "hadm_id", "seq_num"]]
 
         diag_events = pd.concat([diag10_events, diag9_events], ignore_index=True)
 
