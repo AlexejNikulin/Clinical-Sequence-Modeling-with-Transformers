@@ -6,6 +6,8 @@ import pandas as pd
 import json
 from pathlib import Path
 from tqdm import tqdm
+import re
+
  
 class EventType(IntEnum):
     ADMISSION = 0
@@ -30,7 +32,10 @@ class TokenConverter:
             return self.get_unknown_token()
         
         if(raw_event == "DEM"):
-            return self.dem_to_token(row["event_value"])
+            if(row["event_value"].startswith("DEM_R")):
+                return self.race_to_token(row["event_value"])
+            else:
+                return self.dem_to_token(row["event_value"])
         elif(raw_event == "TIME"):
             return self.time_to_token(row["event_value"]) 
         else:
@@ -76,6 +81,32 @@ class TokenConverter:
     def dem_to_token(self, event_value: str) -> str:
         return f"[{event_value}]"
     
+    def race_to_token(self, event_value: str) -> str:
+        if not isinstance(event_value, str):
+            return "[DEM_RACE_UNKNOWN]"
+
+        v = event_value.upper().strip()
+
+        if "WHITE" in v:
+            return "[DEM_RACE_WHITE]"
+
+        if "BLACK" in v or "AFRICAN" in v:
+            return "[DEM_RACE_BLACK]"
+
+        if "HISPANIC" in v or "LATINO" in v:
+            return "[DEM_RACE_HISPANIC]"
+
+        if "ASIAN" in v or "CHINESE" in v:
+            return "[DEM_RACE_ASIAN]"
+
+        if "NATIVE" in v or "PACIFIC" in v:
+            return "[DEM_RACE_NATIVE]"
+
+        if "UNKNOWN" in v or "UNABLE" in v:
+            return "[DEM_RACE_UNKNOWN]"
+
+        return "[DEM_RACE_OTHER]"
+    
     def time_to_token(self, event_value: str) -> str:
         return f"[TIME_CAT_{event_value}]"
  
@@ -115,6 +146,7 @@ class Vocabulary:
     time_vocab: Dict[str, int] = field(default_factory=dict) 
     dem_gen_vocab: Dict[str, int] = field(default_factory=dict)
     dem_age_vocab: Dict[str, int] = field(default_factory=dict)
+    dem_race_vocab: Dict[str, int] = field(default_factory=dict)
     admission_vocab: Dict[str, int] = field(default_factory=dict)
     diagnosis_vocab: Dict[str, int] = field(default_factory=dict)
     labevents_vocab: Dict[str, int] = field(default_factory=dict)
@@ -131,9 +163,10 @@ class Vocabulary:
     START_SPECIAL: int = 0
     START_TIME: int = 3
     START_DEM_GEN: int = 15
-    START_DEM_AGE: int = 18
-    START_ADM: int = 100
-    START_DIAG: int = 110
+    START_DEM_AGE: int = 19
+    START_DEM_RACE: int = 120
+    START_ADM: int = 150
+    START_DIAG: int = 170
     START_LABEV: int = 27000
     START_MED: int = 29000
     START_READM: int = 56000
@@ -144,6 +177,7 @@ class Vocabulary:
     _next_time: int = START_TIME
     _next_dem_gen: int = START_DEM_GEN
     _next_dem_age: int = START_DEM_AGE
+    _next_dem_race: int = START_DEM_RACE
     _next_adm: int = START_ADM
     _next_diag: int = START_DIAG
     _next_labev: int = START_LABEV
@@ -161,6 +195,8 @@ class Vocabulary:
         self.time_vocab = {}
         self.dem_gen_vocab = {}
         self.dem_age_vocab = {}
+        self.dem_race_vocab = {}
+        self.dem_self_vocab = {}
         self.admission_vocab = {}
         self.diagnosis_vocab = {}
         self.labevents_vocab = {}
@@ -180,6 +216,7 @@ class Vocabulary:
             "time": self.time_vocab,
             "demographic_gender": self.dem_gen_vocab,
             "demographic_age": self.dem_age_vocab,
+            "demographic_race": self.dem_race_vocab,
             "admission": self.admission_vocab,
             "diagnosis": self.diagnosis_vocab,
             "labevents": self.labevents_vocab,
@@ -205,6 +242,7 @@ class Vocabulary:
         vocab.time_vocab = {}
         vocab.dem_gen_vocab = {}
         vocab.dem_age_vocab = {}
+        vocab.dem_race_vocab = {}
         vocab.admission_vocab = {}
         vocab.diagnosis_vocab = {}
         vocab.labevents_vocab = {}
@@ -216,6 +254,7 @@ class Vocabulary:
         vocab._next_time = cls.START_TIME
         vocab._next_dem_gen = cls.START_DEM_GEN
         vocab._next_dem_age = cls.START_DEM_AGE
+        vocab._next_dem_race = cls.START_DEM_RACE
         vocab._next_adm = cls.START_ADM
         vocab._next_diag = cls.START_DIAG
         vocab._next_labev = cls.START_LABEV
@@ -227,6 +266,7 @@ class Vocabulary:
         vocab.time_vocab = data["time"]
         vocab.dem_gen_vocab = data["demographic_gender"]
         vocab.dem_age_vocab = data["demographic_age"]
+        vocab.dem_race_vocab = data["demographic_race"]
         vocab.admission_vocab = data["admission"]
         vocab.diagnosis_vocab = data["diagnosis"]
         vocab.labevents_vocab = data["labevents"]
@@ -247,6 +287,7 @@ class Vocabulary:
         self.time_vocab = data["time"]
         self.dem_gen_vocab = data["demographic_gender"]
         self.dem_age_vocab = data["demographic_age"]
+        self.dem_race_vocab = data["demographic_race"]
         self.admission_vocab = data["admission"]
         self.diagnosis_vocab = data["diagnosis"]
         self.labevents_vocab = data["labevents"]
@@ -295,8 +336,19 @@ class Vocabulary:
 
             self._add_token(vocab, token, event)
 
-            if(vocab == self.dem_age_vocab):
-                self.dem_age_vocab = dict(sorted(self.dem_age_vocab.items(), key=lambda item: item[1]))
+            # ===============================
+            # SORT ALL VOCABS (except special)
+            # ===============================
+            self.time_vocab        = self._sort_vocab(self.time_vocab,        self.START_TIME)
+            self.dem_gen_vocab     = self._sort_vocab(self.dem_gen_vocab,     self.START_DEM_GEN)
+            self.dem_age_vocab     = self._sort_vocab(self.dem_age_vocab,     self.START_DEM_AGE)
+            self.dem_race_vocab    = self._sort_vocab(self.dem_race_vocab,    self.START_DEM_RACE)
+            self.admission_vocab   = self._sort_vocab(self.admission_vocab,   self.START_ADM)
+            self.diagnosis_vocab   = self._sort_vocab(self.diagnosis_vocab,   self.START_DIAG)
+            self.labevents_vocab   = self._sort_vocab(self.labevents_vocab,   self.START_LABEV)
+            self.medication_vocab  = self._sort_vocab(self.medication_vocab,  self.START_MED)
+            self.readmission_vocab = self._sort_vocab(self.readmission_vocab, self.START_READM)
+            self.death_vocab       = self._sort_vocab(self.death_vocab,       self.START_DEATH)
  
     # -------------------------
     # Internal helpers
@@ -319,9 +371,16 @@ class Vocabulary:
             vocab[token] = new_id
             self._next_dem_gen += 1
 
+        if token.startswith("[DEM_R"):
+            new_id = self._next_dem_race
+            if new_id >= self.START_ADM:
+                raise RuntimeError("Demographic race vocab exceeded allowed range.")
+            vocab[token] = new_id
+            self._next_dem_race += 1
+
         if token.startswith("[DEM_A"):
             new_id = self._next_dem_age
-            if new_id >= self.START_ADM:
+            if new_id >= self.START_DEM_RACE:
                 raise RuntimeError("Demographic age vocab exceeded allowed range.")
             
             age_str = token.removeprefix("[DEM_AGE_")
@@ -384,6 +443,8 @@ class Vocabulary:
                 return self.dem_gen_vocab
             elif(raw_value.startswith("DEM_A")):
                 return self.dem_age_vocab
+            elif(raw_value.startswith("DEM_R")):
+                return self.dem_race_vocab
         elif(raw_event == "TIME"):
             return self.time_vocab
         else:
@@ -415,6 +476,8 @@ class Vocabulary:
             return "demographic_gender"
         if token in self.dem_age_vocab:
             return "demographic_age"
+        if token in self.dem_race_vocab:
+            return "demographic_race"
         if token in self.admission_vocab:
             return "admission"
         if token in self.diagnosis_vocab:
@@ -468,6 +531,8 @@ class Vocabulary:
             return self.dem_gen_vocab[token]
         if token in self.dem_age_vocab:
             return self.dem_age_vocab[token]
+        if token in self.dem_race_vocab:
+            return self.dem_race_vocab[token]
         if token in self.admission_vocab:
             return self.admission_vocab[token]
         if token in self.diagnosis_vocab:
@@ -494,6 +559,7 @@ class Vocabulary:
             self.time_vocab,
             self.dem_gen_vocab,
             self.dem_age_vocab,
+            self.dem_race_vocab,
             self.admission_vocab,
             self.diagnosis_vocab,
             self.labevents_vocab,
@@ -506,6 +572,35 @@ class Vocabulary:
                 return inv[token_id]
 
         return self.UNK
+    
+   
+    def _token_sort_key(self, token: str):
+        """
+        Sort key that is alphabetical but numeric-aware.
+        Example:
+        [DEM_AGE_9] < [DEM_AGE_10]
+        """
+        parts = re.split(r"(\d+)", token)
+        key = []
+        for p in parts:
+            if p.isdigit():
+                key.append(int(p))
+            else:
+                key.append(p)
+        return key
+    
+    def _sort_vocab(self, vocab: Dict[str, int], start_id: int) -> Dict[str, int]:
+        """
+        Sort a vocab dict by token (alphabetical / numeric-aware)
+        and reassign IDs starting from start_id.
+        """
+        sorted_tokens = sorted(vocab.keys(), key=self._token_sort_key)
+
+        return {
+            token: start_id + i
+            for i, token in enumerate(sorted_tokens)
+        }
+
     
     def get_unknown_token(self) -> str:
         return self.UNK

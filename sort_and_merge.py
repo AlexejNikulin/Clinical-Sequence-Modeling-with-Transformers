@@ -15,6 +15,11 @@ class SortMerger:
         self.PATIENTS_CSV = "../physionet.org/files/mimiciv/3.1/hosp/patients.csv"  
         self.patients_df = pd.read_csv(self.PATIENTS_CSV, usecols=["subject_id","gender","anchor_age","anchor_year_group","dod"])
         self.patients_df = self.patients_df.set_index("subject_id")
+
+        self.ADM_CSV = "../physionet.org/files/mimiciv/3.1/hosp/admissions.csv"  
+        self.adm_df = pd.read_csv(self.ADM_CSV, usecols=["subject_id","race"])
+        self.adm_df = self.adm_df.set_index("subject_id")
+
         self.FINAL_CSV_PATH = "../out/merge_and_sort/combined.csv"
 
     def yeargrp_tok(self, x):
@@ -33,13 +38,25 @@ class SortMerger:
             return "DEM_AGE_UNK"
         a = int(x)
         return f"DEM_AGE_{a}"
+    
+    def race_tok(self, x):
+        if pd.isna(x):
+            return "DEM_RACE_UNK"
+        return f"DEM_RACE_{str(x).strip().upper()}"
 
     def make_demo_df(self, subject_id):
-        if subject_id not in self.patients_df.index:
+        if subject_id not in self.patients_df.index or subject_id not in self.adm_df.index:
             return pd.DataFrame(columns=["subject_id","timestamp","event_type","event_value","result"])
         
         row = self.patients_df.loc[subject_id]
-        toks = [self.gender_tok(row["gender"]), self.age_tok(row["anchor_age"])] # , self.yeargrp_tok(row["anchor_year_group"])
+        row_adm_obj = self.adm_df.loc[subject_id]
+
+        if isinstance(row_adm_obj, pd.DataFrame):
+            row_adm = row_adm_obj.iloc[0]
+        else:
+            row_adm = row_adm_obj
+
+        toks = [self.gender_tok(row["gender"]), self.age_tok(row["anchor_age"]), self.race_tok(row_adm["race"])] # , self.yeargrp_tok(row["anchor_year_group"])
 
         return pd.DataFrame({
             "subject_id": [subject_id]*len(toks),
