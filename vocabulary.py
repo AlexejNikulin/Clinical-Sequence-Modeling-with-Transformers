@@ -381,10 +381,9 @@ class Vocabulary:
             self.diagnosis_vocab   = self._sort_vocab(self.diagnosis_vocab,   self.START_DIAG)
             self.labevents_vocab   = self._sort_vocab(self.labevents_vocab,   self.START_LABEV)
             self.medication_vocab  = self._sort_vocab(self.medication_vocab,  self.START_MED)
-            self.readmission_vocab = self._sort_vocab(self.readmission_vocab, self.START_READM)
+            self.discharge_vocab   = self._sort_vocab(self.discharge_vocab,   self.START_DISCH)
             self.death_vocab       = self._sort_vocab(self.death_vocab,       self.START_DEATH)
-	
-	self._sort_omr_vocabs_by_value()
+        self._sort_omr_vocabs_by_value()
  
     # -------------------------
     # Internal helpers
@@ -674,10 +673,10 @@ class Vocabulary:
         """
         sorted_tokens = sorted(vocab.keys(), key=self._token_sort_key)
 
-	return {
-            token: start_id + i
-            for i, token in enumerate(sorted_tokens)
-        }
+        return {
+                token: start_id + i
+                for i, token in enumerate(sorted_tokens)
+            }
 
     def _extract_float_from_token(self, token: str) -> Optional[float]:
         m = re.search(r"_(-?\d+(?:\.\d+)?)\]$", token)
