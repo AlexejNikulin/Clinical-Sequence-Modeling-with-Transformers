@@ -339,6 +339,7 @@ class Vocabulary:
             # ===============================
             # SORT ALL VOCABS (except special and time)
             # ===============================
+            self.time_vocab        = self._sort_vocab(self.time_vocab,        self.START_TIME)
             self.dem_gen_vocab     = self._sort_vocab(self.dem_gen_vocab,     self.START_DEM_GEN)
             self.dem_age_vocab     = self._sort_vocab(self.dem_age_vocab,     self.START_DEM_AGE)
             self.dem_race_vocab    = self._sort_vocab(self.dem_race_vocab,    self.START_DEM_RACE)

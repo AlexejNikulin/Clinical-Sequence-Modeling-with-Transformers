@@ -116,7 +116,7 @@ class EventSequencer():
                             "subject_id": current_subject,
                             "timestamp": current_timestamp.to_pydatetime() - pd.Timedelta(seconds=1),
                             "event_type": "TIME",
-                            "event_value": gap_category[0]
+                            "event_value": gap_category
                         })
 
                 rows.append(row.to_dict())
