@@ -61,24 +61,34 @@ class EventSequencer():
         Returns:
             List[List[str]]: one ordered list of event strings per subject_id
         """
-        sequences = []
-    
-        df = df.copy()
-    
-        for subject_id, group in df.groupby("subject_id"):
-            patient_sequences = [[], []]
+        data_stream = df.itertuples(index=False, name=None)
 
-            for _, row in group.iterrows():
-    
-                event = vocab.row_to_token(row)
-    
-                if row["event_type"] == "DEM":
-                    patient_sequences[0].append(event)
-                else:
-                    patient_sequences[1].append(event)
-    
-            sequences.append(patient_sequences)
-    
+        sequences = []
+        current_patient_id = None
+        current_patient_seq = [[], []]
+
+        print("Building sequences...")
+        for row in tqdm(data_stream, total=len(df)):
+            subj_id, timestamp, ev_type, ev_val, res = row
+            
+            if subj_id != current_patient_id:
+                if current_patient_id is not None:
+                    sequences.append(current_patient_seq)
+                
+                current_patient_id = subj_id
+                current_patient_seq = [[], []]
+
+            row_data = {"event_type": ev_type, "event_value": ev_val, "result": res}
+            token = vocab.row_to_token(row_data)
+
+            if ev_type == "DEM":
+                current_patient_seq[0].append(token)
+            else:
+                current_patient_seq[1].append(token)
+
+        if current_patient_id is not None:
+            sequences.append(current_patient_seq)
+
         return sequences
 
     def categorize_time_gap(self, gap_days: float) -> str:
@@ -88,55 +98,61 @@ class EventSequencer():
         return "unknown"
 
     
-    def add_time_tokens_to_data(self, df: pd.DataFrame):
-        rows = []
+    def add_time_tokens_to_data(self, df_path=Path("../out/merge_and_sort/combined.csv"), chunk_size=100000):
+        output_path = Path("../out/merge_and_sort/combined2.csv")
+        
+        prev_state = {
+            "subject": None,
+            "timestamp": None,
+            "event_type": None
+        }
 
-        previous_subject = None
-        previous_timestamp = None
-        previous_event_type = None
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
-        idx = 0
+        first_chunk = True
 
-        for _, row in df.iterrows():
-            current_subject = row["subject_id"]
-            current_timestamp = row["timestamp"]
-            current_event_type = row["event_type"]
+        reader = pd.read_csv(df_path, chunksize=chunk_size)
+        total_chunks = sum(1 for _ in reader)
+        reader = pd.read_csv(df_path, chunksize=chunk_size)
+        
+        for chunk in tqdm(reader, total=total_chunks):
+            chunk["timestamp"] = pd.to_datetime(chunk["timestamp"])
+            rows = []
 
-            if(row["event_type"] != "TIME"):
-                if(previous_event_type != "DEM"):
-                    if previous_subject != current_subject:
-                        gap_category = "0_start"
-                        previous_timestamp = None
-                    else:
-                        gap_days = (current_timestamp.to_pydatetime() - previous_timestamp.to_pydatetime()).total_seconds() / 86400
-                        gap_category = self.categorize_time_gap(gap_days)
+            for row in chunk.itertuples(index=False):
+                current_subject = row.subject_id
+                current_timestamp = row.timestamp
+                current_event_type = row.event_type
 
-                    if gap_category not in ["<1h"]:
-                        rows.append({
-                            "subject_id": current_subject,
-                            "timestamp": current_timestamp.to_pydatetime() - pd.Timedelta(seconds=1),
-                            "event_type": "TIME",
-                            "event_value": gap_category
-                        })
+                if current_event_type != "TIME":
+                    if prev_state["event_type"] != "DEM":
+                        if prev_state["subject"] != current_subject:
+                            gap_category = "0_start"
+                        else:
+                            gap_days = (current_timestamp - prev_state["timestamp"]).total_seconds() / 86400
+                            gap_category = self.categorize_time_gap(gap_days)
 
-                rows.append(row.to_dict())
+                        if gap_category not in ["<1h"]:
+                            rows.append({
+                                "subject_id": current_subject,
+                                "timestamp": current_timestamp - pd.Timedelta(seconds=1),
+                                "event_type": "TIME",
+                                "event_value": gap_category
+                            })
 
-            previous_subject = current_subject
-            previous_timestamp = current_timestamp
-            previous_event_type = current_event_type
+                    rows.append(row._asdict())
 
-        out = (
-            pd.DataFrame(rows)
-            .sort_values(["subject_id", "timestamp"])
-            .reset_index(drop=True)
-        )
+                prev_state["subject"] = current_subject
+                prev_state["timestamp"] = current_timestamp
+                prev_state["event_type"] = current_event_type
 
-        out.to_csv(
-            Path("../out/merge_and_sort/combined.csv"), 
-            mode='w', 
-            header=True, 
-            index=False
-        )
+            out_chunk = pd.DataFrame(rows)
+
+            out_chunk.to_csv(
+                output_path, 
+                mode='a' if not first_chunk else 'w', 
+                header=first_chunk, 
+                index=False
+            )
+            first_chunk = False
 
     def build_stage_sequence_with_counts(self, df: pd.DataFrame, subject_id: int):
         """

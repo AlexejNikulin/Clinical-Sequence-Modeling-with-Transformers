@@ -9,39 +9,39 @@ from tokenize_sequences import TokenSequencer
 from pathlib import Path
 import pandas as pd
 import json
+import os
 
 def main():
 
     print("START!")
 
-    # # 1) Extract patient-level events
-    # # extractor = PatientLevelEventExtractor()
-    # # extractor.start_extraction()
+    # 1) Extract patient-level events
+    # extractor = PatientLevelEventExtractor()
+    # extractor.start_extraction()
 
-    # # Short version for debugging
+    # Short version for debugging
     # extractor = PatientLevelEventExtractor_Short()
     # extractor.start_extraction()
 
-    # # 2) Sort and merge events
-    sort_merger = SortMerger()
-    sort_merger.sort_and_merge()
+    # 2) Sort and merge events
+    # sort_merger = SortMerger()
+    # sort_merger.sort_and_merge()
 
-    # # 2.1) Add time tokens
-    # COMBINED_CSV = Path("../out/merge_and_sort/combined.csv")
-    # df = pd.read_csv(COMBINED_CSV)
-
+    # 2.1) Add time tokens
     # event_sequencer = EventSequencer()
-    # sequences = event_sequencer.add_time_tokens_to_data(df)
+    # sequences = event_sequencer.add_time_tokens_to_data()
+    # os.remove("../out/merge_and_sort/combined.csv")
+    # os.rename("../out/merge_and_sort/combined2.csv", "../out/merge_and_sort/combined.csv")
 
-    # # 3) Train/val/test split
-    splitter = DataSplitter()
-    splitter.split_dataset()
+    # 3) Train/val/test split
+    # splitter = DataSplitter()
+    # splitter.split_dataset()
 
     # 4) Build vocabulary
-    vocab = Vocabulary()
-    vocab.build_vocabulary()
+    # vocab = Vocabulary()
+    # vocab.build_vocabulary()
 
-    # # 5) Build patient event sequences
+    # 5) Build patient event sequences
     # for COMBINED_CSV, OUT_IDS in [
     #     ("../out/splits_out/combined_train.csv", "ids.json"),
     #     ("../out/splits_out/combined_test.csv", "test_ids.json"),

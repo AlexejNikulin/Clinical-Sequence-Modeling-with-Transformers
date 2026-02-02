@@ -15,7 +15,8 @@ class EventType(IntEnum):
     DIAGNOSE = 2
     LABEVENTS = 3
     MEDICATION = 4
-    DEATH = 5
+    OMR = 5
+    DEATH = 6
  
 class TokenConverter:
     def convert_row_to_token_seq(self, row):
@@ -66,6 +67,11 @@ class TokenConverter:
             dose = str(row["result"]).strip()
             return self.med_to_token(drug_cd, dose)
  
+        elif event == EventType.OMR:
+            event_val = str(row["event_value"]).strip()
+            result = str(row["result"]).strip()
+            return self.omr_to_token(event_val, result)
+        
         elif event == EventType.DISCHARGE:
             dis_type = str(row["result"]).strip()
             return self.disch_to_token(dis_type)
@@ -108,10 +114,13 @@ class TokenConverter:
         return "[DEM_RACE_OTHER]"
     
     def time_to_token(self, event_value: str) -> str:
-        return f"[TIME_CAT_{event_value}]"
+        return f"[TIME_CAT{event_value}]"
  
     def disch_to_token(self, dis_type) -> str:
         return f"[DISCH_{dis_type}]"
+    
+    def omr_to_token(self, event_val, result) -> str:
+        return f"[OMR_{event_val}_{result}]"
  
     def death_to_token(self) -> str:
         return "[DEATH]"
@@ -151,6 +160,9 @@ class Vocabulary:
     diagnosis_vocab: Dict[str, int] = field(default_factory=dict)
     labevents_vocab: Dict[str, int] = field(default_factory=dict)
     medication_vocab: Dict[str, int] = field(default_factory=dict)
+    omr_bmi_vocab: Dict[str, int] = field(default_factory=dict)
+    omr_weight_vocab: Dict[str, int] = field(default_factory=dict)
+    omr_blood_pres_vocab: Dict[str, int] = field(default_factory=dict)
     discharge_vocab: Dict[str, int] = field(default_factory=dict)
     death_vocab: Dict[str, int] = field(default_factory=dict)
  
@@ -168,9 +180,12 @@ class Vocabulary:
     START_ADM: int = 150
     START_DIAG: int = 170
     START_LABEV: int = 27000
-    START_MED: int = 29000
-    START_DISCH: int = 56000
-    START_DEATH: int = 56010
+    START_MED: int = 31000
+    START_OMR_BMI: int = 58000
+    START_OMR_WEIGHT: int = 60000
+    START_OMR_BLOOD_PRES: int = 63000
+    START_DISCH: int = 77000
+    START_DEATH: int = 77010
  
     # Next free IDs per block
     _next_special: int = START_SPECIAL
@@ -182,6 +197,9 @@ class Vocabulary:
     _next_diag: int = START_DIAG
     _next_labev: int = START_LABEV
     _next_med: int = START_MED
+    _next_omr_bmi: int = START_OMR_BMI
+    _next_omr_weight: int = START_OMR_WEIGHT
+    _next_omr_blood_pres: int = START_OMR_BLOOD_PRES
     _next_disch: int = START_DISCH
     _next_death: int = START_DEATH
  
@@ -201,6 +219,9 @@ class Vocabulary:
         self.diagnosis_vocab = {}
         self.labevents_vocab = {}
         self.medication_vocab = {}
+        self.omr_bmi_vocab = {}
+        self.omr_weight_vocab = {}
+        self.omr_blood_pres_vocab = {}
         self.discharge_vocab = {}
         self.death_vocab = {}
 
@@ -221,6 +242,9 @@ class Vocabulary:
             "diagnosis": self.diagnosis_vocab,
             "labevents": self.labevents_vocab,
             "medication": self.medication_vocab,
+            "omr_bmi": self.omr_bmi_vocab,
+            "omr_weight": self.omr_weight_vocab,
+            "omr_blood_pres": self.omr_blood_pres_vocab,
             "discharge": self.discharge_vocab,
             "death": self.death_vocab,
         }
@@ -247,6 +271,9 @@ class Vocabulary:
         vocab.diagnosis_vocab = {}
         vocab.labevents_vocab = {}
         vocab.medication_vocab = {}
+        vocab.omr_bmi_vocab = {}
+        vocab.omr_weight_vocab = {}
+        vocab.omr_blood_pres_vocab = {}
         vocab.discharge_vocab = {}
         vocab.death_vocab = {}
 
@@ -259,6 +286,9 @@ class Vocabulary:
         vocab._next_diag = cls.START_DIAG
         vocab._next_labev = cls.START_LABEV
         vocab._next_med = cls.START_MED
+        vocab._next_omr_bmi = cls.START_OMR_BMI
+        vocab._next_omr_weight = cls.START_OMR_WEIGHT
+        vocab._next_omr_blood_pres = cls.START_OMR_BLOOD_PRES
         vocab._next_disch = cls.START_DISCH
         vocab._next_death = cls.START_DEATH
 
@@ -271,6 +301,9 @@ class Vocabulary:
         vocab.diagnosis_vocab = data["diagnosis"]
         vocab.labevents_vocab = data["labevents"]
         vocab.medication_vocab = data["medication"]
+        vocab.omr_bmi_vocab = data["omr_bmi"]
+        vocab.omr_weight_vocab = data["omr_weight"]
+        vocab.omr_blood_pres_vocab = data["omr_blood_pres"]
         vocab.discharge_vocab = data["discharge"]
         vocab.death_vocab = data["death"]
 
@@ -292,6 +325,9 @@ class Vocabulary:
         self.diagnosis_vocab = data["diagnosis"]
         self.labevents_vocab = data["labevents"]
         self.medication_vocab = data["medication"]
+        self.omr_bmi_vocab = data["omr_bmi"]
+        self.omr_weight_vocab = data["omr_weight"]
+        self.omr_blood_pres_vocab = data["omr_blood_pres"]
         self.discharge_vocab = data["discharge"]
         self.death_vocab = data["death"]
     
@@ -312,11 +348,11 @@ class Vocabulary:
         if "event_type" not in df.columns:
             raise ValueError("DataFrame missing required column: 'event_type'")
 
-        for _, row in tqdm(df.iterrows(), total=df.shape[0]):
+        stream = df[["event_type", "event_value", "result"]].itertuples(index=False, name=None)
+        for row_tuple in tqdm(stream, total=len(df), desc="Streaming Vocab"):
 
             # --- robust event_type parsing ---
-            raw_event = row["event_type"]
-
+            raw_event = row_tuple[0]
             if pd.isna(raw_event):
                 continue
 
@@ -324,6 +360,12 @@ class Vocabulary:
                 event = int(raw_event)
             except (ValueError, TypeError):
                 event = raw_event
+            
+            row = {
+                "event_type": raw_event,
+                "event_value": row_tuple[1],
+                "result": row_tuple[2]
+            }
 
             # ---------------------------------
             token = self.token_converter.convert_row_to_token_seq(row)
@@ -336,19 +378,20 @@ class Vocabulary:
 
             self._add_token(vocab, token, event)
 
-            # ===============================
-            # SORT ALL VOCABS (except special and time)
-            # ===============================
-            self.time_vocab        = self._sort_vocab(self.time_vocab,        self.START_TIME)
-            self.dem_gen_vocab     = self._sort_vocab(self.dem_gen_vocab,     self.START_DEM_GEN)
-            self.dem_age_vocab     = self._sort_vocab(self.dem_age_vocab,     self.START_DEM_AGE)
-            self.dem_race_vocab    = self._sort_vocab(self.dem_race_vocab,    self.START_DEM_RACE)
-            self.admission_vocab   = self._sort_vocab(self.admission_vocab,   self.START_ADM)
-            self.diagnosis_vocab   = self._sort_vocab(self.diagnosis_vocab,   self.START_DIAG)
-            self.labevents_vocab   = self._sort_vocab(self.labevents_vocab,   self.START_LABEV)
-            self.medication_vocab  = self._sort_vocab(self.medication_vocab,  self.START_MED)
-            self.discharge_vocab   = self._sort_vocab(self.discharge_vocab,   self.START_DISCH)
-            self.death_vocab       = self._sort_vocab(self.death_vocab,       self.START_DEATH)
+        # ===============================
+        # SORT ALL VOCABS (except special and time)
+        # ===============================
+        self.time_vocab        = self._sort_vocab(self.time_vocab,        self.START_TIME)
+        self.dem_gen_vocab     = self._sort_vocab(self.dem_gen_vocab,     self.START_DEM_GEN)
+        self.dem_age_vocab     = self._sort_vocab(self.dem_age_vocab,     self.START_DEM_AGE)
+        self.dem_race_vocab    = self._sort_vocab(self.dem_race_vocab,    self.START_DEM_RACE)
+        self.admission_vocab   = self._sort_vocab(self.admission_vocab,   self.START_ADM)
+        self.diagnosis_vocab   = self._sort_vocab(self.diagnosis_vocab,   self.START_DIAG)
+        self.labevents_vocab   = self._sort_vocab(self.labevents_vocab,   self.START_LABEV)
+        self.medication_vocab  = self._sort_vocab(self.medication_vocab,  self.START_MED)
+        self.discharge_vocab   = self._sort_vocab(self.discharge_vocab,   self.START_DISCH)
+        self.death_vocab       = self._sort_vocab(self.death_vocab,       self.START_DEATH)
+        self._sort_omr_vocabs_by_value()
  
     # -------------------------
     # Internal helpers
@@ -415,10 +458,30 @@ class Vocabulary:
  
         elif event == EventType.MEDICATION:
             new_id = self._next_med
-            if new_id >= self.START_DISCH:
+            if new_id >= self.START_OMR_BMI:
                 raise RuntimeError("Medication vocab exceeded allowed range.")
             vocab[token] = new_id
             self._next_med += 1
+
+        elif event == EventType.OMR:
+            if token.startswith("[OMR_BMI"):
+                new_id = self._next_omr_bmi
+                if new_id >= self.START_OMR_WEIGHT:
+                    raise RuntimeError("OMR BMI vocab exceeded allowed range.")
+                vocab[token] = new_id
+                self._next_omr_bmi += 1
+            elif token.startswith("[OMR_WEIGHT"):
+                new_id = self._next_omr_weight
+                if new_id >= self.START_OMR_BLOOD_PRES:
+                    raise RuntimeError("OMR weight vocab exceeded allowed range.")
+                vocab[token] = new_id
+                self._next_omr_weight += 1
+            elif token.startswith("[OMR_BLOOD"):
+                new_id = self._next_omr_blood_pres
+                if new_id >= self.START_DISCH:
+                    raise RuntimeError("OMR blood pressure vocab exceeded allowed range.")
+                vocab[token] = new_id
+                self._next_omr_blood_pres += 1
  
         elif event == EventType.DISCHARGE:
             new_id = self._next_disch
@@ -461,6 +524,13 @@ class Vocabulary:
                 return self.labevents_vocab
             if event == EventType.MEDICATION:
                 return self.medication_vocab
+            if event == EventType.OMR:
+                if(raw_value.startswith("BMI")):
+                    return self.omr_bmi_vocab
+                elif(raw_value.startswith("WEIGHT")):
+                    return self.omr_weight_vocab
+                elif(raw_value.startswith("BLOOD")):
+                    return self.omr_blood_pres_vocab
             if event == EventType.DISCHARGE:
                 return self.discharge_vocab
             if event == EventType.DEATH:
@@ -486,6 +556,12 @@ class Vocabulary:
             return "labevents"
         if token in self.medication_vocab:
             return "medication"
+        if token in self.omr_bmi_vocab:
+            return "omr_bmi"
+        if token in self.omr_weight_vocab:
+            return "omr_weight"
+        if token in self.omr_blood_pres_vocab:
+            return "omr_blood_pres"
         if token in self.discharge_vocab:
             return "discharge"
         if token in self.death_vocab:
@@ -541,6 +617,12 @@ class Vocabulary:
             return self.labevents_vocab[token]
         if token in self.medication_vocab:
             return self.medication_vocab[token]
+        if token in self.omr_bmi_vocab:
+            return self.omr_bmi_vocab[token]
+        if token in self.omr_weight_vocab:
+            return self.omr_weight_vocab[token]
+        if token in self.omr_blood_pres_vocab:
+            return self.omr_blood_pres_vocab[token]
         if token in self.discharge_vocab:
             return self.discharge_vocab[token]
         if token in self.death_vocab:
@@ -564,6 +646,9 @@ class Vocabulary:
             self.diagnosis_vocab,
             self.labevents_vocab,
             self.medication_vocab,
+            self.omr_bmi_vocab,
+            self.omr_weight_vocab,
+            self.omr_blood_pres_vocab,
             self.discharge_vocab,
             self.death_vocab,
         ):
@@ -597,9 +682,58 @@ class Vocabulary:
         sorted_tokens = sorted(vocab.keys(), key=self._token_sort_key)
 
         return {
-            token: start_id + i
-            for i, token in enumerate(sorted_tokens)
-        }
+                token: start_id + i
+                for i, token in enumerate(sorted_tokens)
+            }
+
+    def _extract_float_from_token(self, token: str) -> Optional[float]:
+        m = re.search(r"_(-?\d+(?:\.\d+)?)\]$", token)
+        if not m:
+            return None
+        try:
+            return float(m.group(1))
+        except ValueError:
+            return None
+
+    def _extract_bp_key(self, token: str):
+        m = re.search(r"_([0-9]{2,3})/([0-9]{2,3})\]$", token)
+        if not m:
+            return (10**9, 10**9) 
+        return (int(m.group(1)), int(m.group(2)))  
+
+    def _reassign_sorted_ids(self, vocab: Dict[str, int], start_id: int, key_func) -> Dict[str, int]:
+        items = list(vocab.keys())
+        items_sorted = sorted(items, key=key_func)
+        return {tok: start_id + i for i, tok in enumerate(items_sorted)}
+
+    def _sort_omr_vocabs_by_value(self) -> None:
+        # BMI
+        self.omr_bmi_vocab = self._reassign_sorted_ids(
+            self.omr_bmi_vocab,
+            self.START_OMR_BMI,
+            key_func=lambda tok: (self._extract_float_from_token(tok) is None,
+                                self._extract_float_from_token(tok) if self._extract_float_from_token(tok) is not None else 10**9,
+                                tok)
+        )
+        self._next_omr_bmi = self.START_OMR_BMI + len(self.omr_bmi_vocab)
+
+        # WEIGHT
+        self.omr_weight_vocab = self._reassign_sorted_ids(
+            self.omr_weight_vocab,
+            self.START_OMR_WEIGHT,
+            key_func=lambda tok: (self._extract_float_from_token(tok) is None,
+                                self._extract_float_from_token(tok) if self._extract_float_from_token(tok) is not None else 10**9,
+                                tok)
+        )
+        self._next_omr_weight = self.START_OMR_WEIGHT + len(self.omr_weight_vocab)
+
+        # BLOOD PRESSURE 
+        self.omr_blood_pres_vocab = self._reassign_sorted_ids(
+            self.omr_blood_pres_vocab,
+            self.START_OMR_BLOOD_PRES,
+            key_func=lambda tok: (*self._extract_bp_key(tok), tok)
+        )
+        self._next_omr_blood_pres = self.START_OMR_BLOOD_PRES + len(self.omr_blood_pres_vocab)
 
     
     def get_unknown_token(self) -> str:

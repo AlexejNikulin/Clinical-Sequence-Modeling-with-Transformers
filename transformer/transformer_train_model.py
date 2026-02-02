@@ -282,11 +282,16 @@ class TransformerTrainer:
     def ensure_dir(self, path: str) -> None:
         os.makedirs(path, exist_ok=True)
 
-    def make_run_log_path(self, base_dir: str = "logs", prefix: str = "train_log") -> str:
+    def make_run_log_path(self, experiment_name: str = None, base_dir: str = "logs", prefix: str = "train_log") -> str:
         self.ensure_dir(base_dir)
         stamp = time.strftime("%Y%m%d_%H%M%S")
-        log_path = os.path.join(base_dir, f"{prefix}_{stamp}.csv")
-        checkpoint_path = os.path.join("checkpoints", f"{prefix}_{stamp}.pth")
+
+        filename = f"{prefix}_{stamp}"
+        if experiment_name is not None:
+            filename += f"_{experiment_name}"
+
+        log_path = os.path.join(base_dir, f"{filename}.csv")
+        checkpoint_path = os.path.join("checkpoints", f"{filename}.pth")
         return log_path, checkpoint_path
 
     def train_mlm(
@@ -308,6 +313,7 @@ class TransformerTrainer:
         mask_demo: bool = False,
         mask_mode: Literal["token", "span", "recency"] = "token",
         log_every: int = 10,
+        experiment_name: str = None,
     ):
         set_seed(seed)
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -330,7 +336,7 @@ class TransformerTrainer:
         optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
         model.train()
 
-        log_path, checkpoint_path = self.make_run_log_path()
+        log_path, checkpoint_path = self.make_run_log_path(experiment_name=experiment_name)
         fieldnames = ["step", "loss", "val_loss", "grad_norm", "logits_max", "n_masked", "masked_ratio"]
 
         with open(log_path, "w", newline="") as f:
@@ -473,6 +479,9 @@ def main() -> None:
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--max_len", type=int, default=256)
     parser.add_argument("--d_model", type=int, default=192)
+    parser.add_argument("--n_layers", type=int, default=3)
+    parser.add_argument("--n_heads", type=int, default=6)
+    parser.add_argument("--n_event_types", type=int, default=2)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--p_mlm", type=float, default=0.15)
     parser.add_argument("--seed", type=int, default=0)
@@ -484,6 +493,7 @@ def main() -> None:
     parser.add_argument("--ids_path", type=str, default="../out/sequences/ids.json")
     parser.add_argument("--val_ids_path", type=str, default="../out/sequences/val_ids.json")
     parser.add_argument("--vocab_path", type=str, default="../out/vocab/vocabulary.json")
+    parser.add_argument("--experiment_name", type=str, default=None)
     args = parser.parse_args()
 
     # Resolve robustly (works from repo root OR transformer/)
@@ -507,10 +517,10 @@ def main() -> None:
         vocab_size=vocab.get_size(),
         max_len=args.max_len,
         d_model=args.d_model,
-        n_layers=3,
-        n_heads=6,
+        n_layers=args.n_layers,
+        n_heads=args.n_heads,
         use_event_type_embeddings=(not args.no_event_types),
-        n_event_types=2,
+        n_event_types=args.n_event_types,
         pad_token_id=pad_id,
         mask_token_id=mask_id,
     )
@@ -547,6 +557,7 @@ def main() -> None:
         mask_demo=args.mask_demo,
         mask_mode=args.mask_mode,
         log_every=1000,
+        experiment_name=args.experiment_name,
     )
 
 

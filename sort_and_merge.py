@@ -10,6 +10,7 @@ class SortMerger:
         self.DISCHARGES_CSV = "../out/extract_patient_level_events/events_dynamic_discharges.csv"
         self.MEDICATION_CSV = "../out/extract_patient_level_events/events_dynamic_emar.csv"
         self.LABEVENTS_CSV = "../out/extract_patient_level_events/events_dynamic_labevents.csv"
+        self.OMR_CSV = "../out/extract_patient_level_events/events_dynamic_omr.csv"
 
         self.PATIENT_CSV_PATH = "../out/merge_and_sort/patients/"
         self.PATIENTS_CSV = "../physionet.org/files/mimiciv/3.1/hosp/patients.csv"  
@@ -103,6 +104,7 @@ class SortMerger:
         self.write_patient_events_for_file(self.DISCHARGES_CSV, subject_ids_with_file)
         self.write_patient_events_for_file(self.MEDICATION_CSV, subject_ids_with_file)
         self.write_patient_events_for_file(self.LABEVENTS_CSV, subject_ids_with_file)
+        self.write_patient_events_for_file(self.OMR_CSV, subject_ids_with_file)
 
         # For each patient, sort the events, and append them to the global dataframe
         patient_files = os.listdir(self.PATIENT_CSV_PATH)
@@ -118,7 +120,7 @@ class SortMerger:
 
             if patient_row["dod"] is not None and patient_row["dod"] != "NaN":
                 death_timestamp = f"{patient_row['dod']} 00:00:00"
-                death_row = pd.DataFrame({"subject_id": patient_id, "timestamp": death_timestamp, "event_type": 5, "event_value": "", "result": ""}, index=[0])
+                death_row = pd.DataFrame({"subject_id": patient_id, "timestamp": death_timestamp, "event_type": 6, "event_value": "", "result": ""}, index=[0])
                 patient_df = pd.concat([patient_df, death_row], ignore_index=True)
 
             patient_df["timestamp"] = pd.to_datetime(patient_df["timestamp"], errors="coerce")

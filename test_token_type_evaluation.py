@@ -65,7 +65,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ids_path", type=str, default="../out/sequences/ids.json")
     parser.add_argument("--vocab_path", type=str, default="../out/vocab/vocabulary.json")
-    parser.add_argument("--checkpoint", type=str, default="checkpoints/train_log_20260125_164915.pth")
+    parser.add_argument("--checkpoint", type=str, default="checkpoints/train_log_20260130_174849.pth")
     parser.add_argument("--max_len", type=int, default=256)
     parser.add_argument("--d_model", type=int, default=192)
     parser.add_argument("--n_layers", type=int, default=3)
