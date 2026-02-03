@@ -1,40 +1,28 @@
 '''
 Docstring for evaluation.mlm_eval
 
-ls -la data/eval.jsonl
+ls -la data/eval_val.jsonl
 ls -la data | head
 find . -maxdepth 4 -name "eval.jsonl" -print
 
 
+
 PATH: 
-    Token masking:
-        python -m evaluation.mlm_eval \
-            --jsonl data/eval.jsonl \
-            --ckpt checkpoints/mlm_d384.pt \
-            --p_mlm 0.15 \
-            --strategy token \
-            --topk 1,5,10 2>&1 | tee /tmp/mlm_eval_err.txt
-            tail -n 80 /tmp/mlm_eval_err.txt
+python -m evaluation.mlm_eval --jsonl data/eval_val.jsonl --ckpt checkpoints/mlm_d384.pt --topk 1,5,10
 
+python -m evaluation.mlm_eval --jsonl data/eval_val.jsonl --ckpt checkpoints/mlm_baseline.pt --topk 1,5,10 
 
-        python -m evaluation.mlm_eval \
-            --jsonl data/eval.jsonl \
-            --ckpt checkpoints/mlm_recency.pt \
-            --p_mlm 0.15 \
-            --strategy token \
-            --topk 1,5,10
+python -m evaluation.mlm_eval --jsonl data/eval_val.jsonl --ckpt checkpoints/mlm_n_event_types_7.pt --topk 1,5,10 
 
-       
+python -m evaluation.mlm_eval --jsonl data/eval_val.jsonl --ckpt checkpoints/mlm_n_heads_12_n_layer_6.pt --topk 1,5,10 
 
-    span masking:     
-        python -m evaluation.mlm_eval \
-            --jsonl data/eval.jsonl \
-            --ckpt checkpoints/mlm_span.pt \
-            --p_mlm 0.15 \
-            --strategy token \
-            --topk 1,5,10
-        
-   
+python -m evaluation.mlm_eval --jsonl data/eval_val.jsonl --ckpt checkpoints/mlm_n_heads_12.pt --topk 1,5,10 
+
+python -m evaluation.mlm_eval --jsonl data/eval_val.jsonl --ckpt checkpoints/mlm_n_layer_6.pt --topk 1,5,10
+
+python -m evaluation.mlm_eval --jsonl data/eval_val.jsonl --ckpt checkpoints/mlm_recency.pt --topk 1,5,10 
+
+python -m evaluation.mlm_eval --jsonl data/eval_val.jsonl --ckpt checkpoints/mlm_span.pt --topk 1,5,10 
 
 
 '''
@@ -44,212 +32,239 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from typing import Any, Dict, Iterable, Optional, Tuple
+import json
+
+from typing import Any, Dict, List, Optional
 
 import torch
-import torch.nn.functional as F
+
 from torch.utils.data import DataLoader
-import warnings
-warnings.filterwarnings(
-    "ignore",
-    message="The PyTorch API of nested tensors is in prototype stage*",
-)
+
 
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from clinical_eval_utils import (
-    IGNORE_INDEX,
+from evaluation.clinical_eval_utils import (
     ClinicalSequenceDataset,
+    IGNORE_INDEX,
     TopKResult,
     load_jsonl,
+    mrr_from_logits,
     topk_accuracy_from_logits,
-    masking_policy_expected_corruption,
-)
-from mlm_masking import mlm_mask_801010, mlm_mask_span_801010
-from compact_transformer_encoder import (
-    CompactTransformerConfig,
-    CompactTransformerEncoder,
+    build_token_id_to_group_from_vocab,
+    event_type_top1_acc_from_logits,
+    event_type_topk_acc_from_logits,
 )
 
+from compact_transformer_encoder import CompactTransformerConfig, CompactTransformerEncoder
 
-
-
-def _extract_logits(model_out: Any) -> torch.Tensor:
-    """Robustly extract logits across slightly different forward() conventions."""
-    if isinstance(model_out, dict) and "logits" in model_out:
-        return model_out["logits"]
-    if hasattr(model_out, "logits"):
-        return model_out.logits
-    if isinstance(model_out, (tuple, list)) and len(model_out) > 0:
-        return model_out[0]
-    raise ValueError("Could not extract logits from model output")
-
-
-@torch.no_grad()
-def run_mlm_eval(
-    *,
-    model: CompactTransformerEncoder,
-    loader: DataLoader,
-    device: torch.device,
-    vocab_size: int,
-    mask_token_id: int,
-    pad_token_id: int,
-    p_mlm: float,
-    strategy: str,
-    span_len_range: Tuple[int, int] = (3, 10),
-    never_mask_token_ids: Optional[Iterable[int]] = None,
-    topk: Tuple[int, ...] = (1, 5, 10),
-) -> Dict[str, Any]:
-    model.eval()
-
-    total_loss = 0.0
-    total_pred = 0
-    topk_hits = {k: 0 for k in topk}
-
-    for batch in loader:
-        input_ids = batch["input_ids"].to(device)
-        attention_mask = batch["attention_mask"].to(device)
-        event_type_ids = batch["event_type_ids"].to(device)
-
-        if strategy == "token":
-            masked_ids, labels = mlm_mask_801010(
-                input_ids,
-                attention_mask,
-                mask_token_id=mask_token_id,
-                vocab_size=vocab_size,
-                p_mlm=p_mlm,
-                pad_token_id=pad_token_id,
-                never_mask_token_ids=never_mask_token_ids,
-            )
-        elif strategy == "span":
-            masked_ids, labels = mlm_mask_span_801010(
-                input_ids,
-                attention_mask,
-                mask_token_id=mask_token_id,
-                vocab_size=vocab_size,
-                p_mlm=p_mlm,
-                span_len_range=span_len_range,
-                pad_token_id=pad_token_id,
-                never_mask_token_ids=never_mask_token_ids,
-            )
-        else:
-            raise ValueError(f"Unknown strategy: {strategy}")
-
-        out = model(
-            input_ids=masked_ids,
-            attention_mask=attention_mask,
-            event_type_ids=event_type_ids,
-            labels=None,
-            return_hidden=False,
-        )
-
-        logits = _extract_logits(out)  # [B, L, V]
-
-        # Loss on masked positions only
-        loss = F.cross_entropy(
-            logits.view(-1, logits.size(-1)),
-            labels.view(-1),
-            ignore_index=IGNORE_INDEX,
-            reduction="sum",
-        )
-        n_pred = int((labels != IGNORE_INDEX).sum().item())
-        total_loss += float(loss.item())
-        total_pred += n_pred
-
-        # Top-k hits
-        for k in topk:
-            r: TopKResult = topk_accuracy_from_logits(logits, labels, k=k)
-            if r.n > 0:
-                topk_hits[k] += int(round(r.accuracy * r.n))
-
-    metrics: Dict[str, Any] = {
-        "strategy": strategy,
-        "p_mlm": float(p_mlm),
-        "n_masked": int(total_pred),
-        "mlm_loss": (total_loss / max(1, total_pred)),
-        "mlm_ppl": float(torch.exp(torch.tensor(total_loss / max(1, total_pred))).item()),
-    }
-    for k in topk:
-        acc = topk_hits[k] / max(1, total_pred)
-        metrics[f"top{k}"] = float(acc)
-    return metrics
+from mlm_masking import mlm_mask_801010
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Evaluate MLM masked-token prediction (Top-k + loss).")
-    p.add_argument("--jsonl", type=str, required=True, help="Eval JSONL with demo_tokens/event_tokens")
-    p.add_argument("--ckpt", type=str, required=True, help="Pretrained MLM checkpoint (.pt)")
+    p = argparse.ArgumentParser(
+        description="MLM evaluation (Top-k + MRR). If JSONL has no labels, creates MLM labels on-the-fly."
+    )
+    p.add_argument("--jsonl", type=str, required=True)
+    p.add_argument("--ckpt", type=str, required=True)
+
+    # NEW: for event-type/group eval from Vocabulary
+    p.add_argument("--vocab_path", type=str, default=None, help="Path to vocabulary.json (for event-type eval).")
+
     p.add_argument("--batch_size", type=int, default=32)
-    p.add_argument("--max_len", type=int, default=128)
+    p.add_argument("--max_len", type=int, default=256)
     p.add_argument("--pad_id", type=int, default=0)
     p.add_argument("--mask_id", type=int, default=1)
-    p.add_argument("--vocab_size", type=int, required=False, default=None)
+    p.add_argument("--default_event_type_id", type=int, default=1)
+    p.add_argument("--topk", type=str, default="1,5,10")
+
     p.add_argument("--p_mlm", type=float, default=0.15)
-    p.add_argument("--strategy", choices=["token", "span"], default="token")
-    p.add_argument("--span_min", type=int, default=3)
-    p.add_argument("--span_max", type=int, default=10)
-    p.add_argument("--topk", type=str, default="1,5,10", help="Comma-separated k list")
+    p.add_argument("--seed", type=int, default=0)
+
+    p.add_argument("--avoid_random_special", action="store_true")
+    p.add_argument("--use_on_the_fly_masking", action="store_true", help="Force on-the-fly masking even if labels exist.")
     return p.parse_args()
+
+
+def _jsonl_has_labels(path: str, max_check: int = 200) -> bool:
+    n = 0
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            r = json.loads(line)
+            if "labels" in r:
+                return True
+            n += 1
+            if n >= max_check:
+                break
+    return False
+
+
+@torch.no_grad()
+def evaluate(
+    model: CompactTransformerEncoder,
+    loader: DataLoader,
+    *,
+    device: torch.device,
+    topks: List[int],
+    vocab_size: int,
+    pad_id: int,
+    mask_id: int,
+    p_mlm: float,
+    use_on_the_fly_masking: bool,
+    generator: torch.Generator,
+    token_id_to_group: Optional[Dict[int, int]] = None,
+    avoid_random_special: bool = False,
+) -> Dict[str, Any]:
+    model.eval()
+
+    totals = {k: {"correct": 0, "total": 0} for k in topks}
+    mrr_vals: List[float] = []
+
+    et_top1_vals: List[float] = []
+    et_topk_vals = {k: [] for k in topks}
+
+    total_eval_positions = 0
+    skipped_batches = 0
+
+    avoid_random_ids = None
+    if avoid_random_special:
+        avoid_random_ids = [int(pad_id), int(mask_id)]
+
+    for batch in loader:
+        input_ids = batch["input_ids"].to(device)
+        attn = batch["attention_mask"].to(device)
+        ev = batch["event_type_ids"].to(device)
+
+        if use_on_the_fly_masking:
+            masked_ids, labels = mlm_mask_801010(
+                input_ids=input_ids,
+                attention_mask=attn,
+                mask_token_id=int(mask_id),
+                vocab_size=int(vocab_size),
+                p_mlm=float(p_mlm),
+                pad_token_id=int(pad_id),
+                generator=generator,
+                avoid_random_token_ids=avoid_random_ids,
+            )
+            labels = labels.masked_fill(attn == 0, IGNORE_INDEX)
+            x = masked_ids
+        else:
+            labels = batch["labels"].to(device)
+            x = input_ids
+
+        n_pos = int((labels != IGNORE_INDEX).sum().item())
+        if n_pos == 0:
+            skipped_batches += 1
+            continue
+        total_eval_positions += n_pos
+
+        out = model(input_ids=x, attention_mask=attn, event_type_ids=ev, labels=labels, return_hidden=False)
+        logits = out["logits"]
+
+        for k in topks:
+            res = topk_accuracy_from_logits(logits, labels, k=k)
+            totals[k]["correct"] += res.correct
+            totals[k]["total"] += res.total
+
+        mrr_vals.append(mrr_from_logits(logits, labels))
+
+        if token_id_to_group is not None:
+            et_top1_vals.append(event_type_top1_acc_from_logits(logits, labels, token_id_to_group))
+            for k in topks:
+                et_topk_vals[k].append(event_type_topk_acc_from_logits(logits, labels, token_id_to_group, k=k))
+
+    metrics: Dict[str, Any] = {}
+    for k in topks:
+        c = totals[k]["correct"]
+        t = totals[k]["total"]
+        metrics[f"mlm_top{k}_acc"] = c / t if t else float("nan")
+
+    metrics["mlm_mrr"] = float(sum(mrr_vals) / len(mrr_vals)) if mrr_vals else float("nan")
+    metrics["mlm_total_eval_positions"] = int(total_eval_positions)
+    metrics["mlm_skipped_batches_zero_eval_positions"] = int(skipped_batches)
+
+    if token_id_to_group is not None and len(et_top1_vals) > 0:
+        metrics["mlm_event_type_top1_acc"] = float(sum(et_top1_vals) / len(et_top1_vals))
+        for k in topks:
+            xs = et_topk_vals[k]
+            metrics[f"mlm_event_type_top{k}_acc"] = float(sum(xs) / len(xs)) if xs else float("nan")
+
+    return metrics
+
+
+def _load_ckpt_and_model(ckpt_path: str) -> CompactTransformerEncoder:
+    ckpt = torch.load(ckpt_path, map_location="cpu")
+    if isinstance(ckpt, dict) and "cfg" in ckpt and "model_state_dict" in ckpt:
+        cfg = CompactTransformerConfig(**ckpt["cfg"])
+        model = CompactTransformerEncoder(cfg)
+        model.load_state_dict(ckpt["model_state_dict"], strict=True)
+        return model
+    # fallback: raw state_dict checkpoints (less ideal)
+    raise ValueError("Unsupported checkpoint format. Expected dict with keys: cfg, model_state_dict.")
 
 
 def main() -> None:
     args = parse_args()
+
+    model = _load_ckpt_and_model(args.ckpt)
+    cfg = model.cfg if hasattr(model, "cfg") else None  # some implementations store cfg on model
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    ckpt = torch.load(args.ckpt, map_location="cpu")
-    if "cfg" not in ckpt or "model_state_dict" not in ckpt:
-        raise ValueError("Checkpoint must contain keys: cfg, model_state_dict")
-
-    cfg = CompactTransformerConfig(**ckpt["cfg"])
-    if args.max_len > cfg.max_len:
-        raise ValueError(
-            f"--max_len={args.max_len} exceeds encoder cfg.max_len={cfg.max_len}. "
-            "Either retrain with larger max_len or reduce eval max_len."
-        )
-
-    model = CompactTransformerEncoder(cfg).to(device)
-    model.load_state_dict(ckpt["model_state_dict"], strict=True)
-    model.eval()
-
-    # Prefer vocab_size from checkpoint/config when available.
-    vocab_size = args.vocab_size
-    if vocab_size is None:
-        if hasattr(cfg, "vocab_size"):
-            vocab_size = int(cfg.vocab_size)
-        else:
-            raise ValueError("--vocab_size must be provided if not present in checkpoint cfg")
-
-    ks = tuple(int(x) for x in args.topk.split(",") if x.strip())
+    model.to(device)
 
     records = load_jsonl(args.jsonl)
-    ds = ClinicalSequenceDataset(records, max_len=args.max_len, pad_id=args.pad_id)
+    ds = ClinicalSequenceDataset(
+        records,
+        max_len=args.max_len,
+        pad_id=args.pad_id,
+        default_event_type_id=args.default_event_type_id,
+    )
     loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False)
 
-    metrics = run_mlm_eval(
-        model=model,
-        loader=loader,
+    topks = [int(x) for x in args.topk.split(",") if x.strip()]
+
+    # Decide on-the-fly masking
+    has_labels = _jsonl_has_labels(args.jsonl, max_check=200)
+    use_on_the_fly = bool(args.use_on_the_fly_masking) or (not has_labels)
+
+    gen = torch.Generator(device=device)
+    gen.manual_seed(int(args.seed))
+
+    token_id_to_group = None
+    if args.vocab_path:
+        from vocabulary import Vocabulary
+        vocab = Vocabulary.load(args.vocab_path)
+        token_id_to_group = build_token_id_to_group_from_vocab(vocab)
+
+    # vocab_size from cfg
+    vocab_size = int(cfg.vocab_size) if cfg is not None else None
+    if vocab_size is None:
+        raise ValueError("Could not infer vocab_size from model cfg.")
+
+    metrics = evaluate(
+        model,
+        loader,
         device=device,
-        vocab_size=int(vocab_size),
-        mask_token_id=int(args.mask_id),
-        pad_token_id=int(args.pad_id),
+        topks=topks,
+        vocab_size=vocab_size,
+        pad_id=int(args.pad_id),
+        mask_id=int(args.mask_id),
         p_mlm=float(args.p_mlm),
-        strategy=args.strategy,
-        span_len_range=(int(args.span_min), int(args.span_max)),
-        topk=ks,
+        use_on_the_fly_masking=use_on_the_fly,
+        generator=gen,
+        token_id_to_group=token_id_to_group,
+        avoid_random_special=bool(args.avoid_random_special),
     )
 
-    # Analytical expectations for corruption under 80/10/10
-    exp = masking_policy_expected_corruption(float(args.p_mlm))
-
     print(f"device={device}")
-    print(f"strategy={metrics['strategy']} p_mlm={metrics['p_mlm']}")
-    print("expected_corruption:", {k: round(v, 6) for k, v in exp.items()})
-    print(f"n_masked={metrics['n_masked']} mlm_loss={metrics['mlm_loss']:.6f} mlm_ppl={metrics['mlm_ppl']:.4f}")
-    for k in ks:
-        print(f"top{k}={metrics[f'top{k}']:.4f}")
+    print(f"use_on_the_fly_masking={use_on_the_fly} (jsonl_has_labels={has_labels})")
+    for k, v in metrics.items():
+        print(f"{k}={v:.6f}" if isinstance(v, float) else f"{k}={v}")
 
 
 if __name__ == "__main__":
