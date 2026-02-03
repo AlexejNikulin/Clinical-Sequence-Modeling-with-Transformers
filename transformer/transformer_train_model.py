@@ -314,6 +314,7 @@ class TransformerTrainer:
         mask_mode: Literal["token", "span", "recency"] = "token",
         log_every: int = 10,
         experiment_name: str = None,
+        lr_decay: bool = False,
     ):
         set_seed(seed)
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -334,6 +335,7 @@ class TransformerTrainer:
 
         model = CompactTransformerEncoder(cfg).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
+        lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda epoch: 1.0) if not lr_decay else torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=1.0, end_factor=0.0, total_iters=steps)
         model.train()
 
         log_path, checkpoint_path = self.make_run_log_path(experiment_name=experiment_name)
@@ -381,6 +383,7 @@ class TransformerTrainer:
 
             grad_norm = self.global_grad_norm(model)
             optimizer.step()
+            lr_scheduler.step()
 
             logits_max = out["logits"].abs().max().item()
 
@@ -485,6 +488,7 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--p_mlm", type=float, default=0.15)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--lr_decay", type=bool, default=False)
     parser.add_argument("--mask_demo", action="store_true")
     parser.add_argument("--mask_mode", type=str, default="token", choices=["token", "span", "recency"])
     parser.add_argument("--no_event_types", action="store_true")
@@ -558,6 +562,7 @@ def main() -> None:
         mask_mode=args.mask_mode,
         log_every=1000,
         experiment_name=args.experiment_name,
+        lr_decay=args.lr_decay
     )
 
 
