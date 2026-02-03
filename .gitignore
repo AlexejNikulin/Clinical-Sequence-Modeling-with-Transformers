@@ -1,2 +1,10 @@
 **__pycache__**
 checkpoints
+# macOS
+.DS_Store
+
+# local artifacts
+checkpoints_raw/
+data/
+*.pth
+.DS_Store
