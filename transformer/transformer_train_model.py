@@ -487,10 +487,14 @@ def main() -> None:
     parser.add_argument("--n_event_types", type=int, default=2)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--p_mlm", type=float, default=0.15)
+    parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--lr_decay", type=bool, default=False)
+    parser.add_argument("--norm_first", type=bool, default=False)
+    parser.add_argument("--rms_norm", type=bool, default=False)
     parser.add_argument("--mask_demo", action="store_true")
     parser.add_argument("--mask_mode", type=str, default="token", choices=["token", "span", "recency"])
+    parser.add_argument("--activation", type=str, default="gelu", choices=["gelu", "relu", "silu"])
     parser.add_argument("--no_event_types", action="store_true")
 
     # IMPORTANT: defaults relative to repo root
@@ -527,6 +531,10 @@ def main() -> None:
         n_event_types=args.n_event_types,
         pad_token_id=pad_id,
         mask_token_id=mask_id,
+        dropout=args.dropout,
+        activation=args.activation,
+        norm_first=args.norm_first,
+        rms_norm=args.rms_norm,
     )
 
     input_ids, attention_mask, segment_ids = build_from_joint_format(

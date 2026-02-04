@@ -30,6 +30,11 @@ class CompactTransformerConfig:
     pad_token_id: int = 0
     mask_token_id: int = 1
 
+    activation: str = "gelu"
+
+    norm_first: bool = False
+    rms_norm: bool = False
+
 
 class CompactTransformerEncoder(nn.Module):
     """
@@ -64,19 +69,23 @@ class CompactTransformerEncoder(nn.Module):
         if cfg.use_event_type_embeddings:
             self.event_type_emb = nn.Embedding(cfg.n_event_types, cfg.d_model)
 
+        activation = cfg.activation
+        if activation == "silu":
+            activation = nn.SiLU()
+
         # Transformer encoder
         enc_layer = nn.TransformerEncoderLayer(
             d_model=cfg.d_model,
             nhead=cfg.n_heads,
             dim_feedforward=cfg.d_ff,
             dropout=cfg.dropout,
-            activation="gelu",           # we can switch to "SiLU", but the best default for MLM and what matches ETHOS is "GELU"!
+            activation=activation,           # we can switch to "SiLU", but the best default for MLM and what matches ETHOS is "GELU"!
             batch_first=True,             # keeps tensors [B, L, D]
-            norm_first=False,              # typically improves stability, but can be True
+            norm_first=cfg.norm_first,              # typically improves stability, but can be True
         )
         self.encoder = nn.TransformerEncoder(enc_layer, num_layers=cfg.n_layers)
 
-        self.final_ln = nn.LayerNorm(cfg.d_model, eps=cfg.layer_norm_eps)
+        self.final_ln = nn.RMSNorm(cfg.d_model, eps=cfg.layer_norm_eps) if cfg.rms_norm else nn.LayerNorm(cfg.d_model, eps=cfg.layer_norm_eps)
         self.lm_head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
 
         # Optional: tie weights with token embedding for parameter efficiency
