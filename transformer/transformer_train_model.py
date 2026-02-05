@@ -49,7 +49,6 @@ except ModuleNotFoundError:
 
 from mlm_masking import mlm_mask_801010, mlm_mask_span_801010, mlm_mask_recency_801010
 from compact_transformer_encoder import CompactTransformerConfig, CompactTransformerEncoder
-from evaluation.next_event_eval import _extract_logits, build_next_event_objective
 from evaluation.clinical_eval_utils import IGNORE_INDEX
 
 
@@ -375,7 +374,6 @@ class TransformerTrainer:
 
             optimizer.zero_grad(set_to_none=True)
             out = model(**mlm_batch)
-
             loss = out["loss"]
             loss.backward()
             total_loss += float(loss.item())
@@ -423,7 +421,7 @@ class TransformerTrainer:
                         labels=None,
                         return_hidden=False,
                     )
-                    logits = _extract_logits(out)
+                    logits = out["logits"]
 
                     val_loss = F.cross_entropy(
                         logits.view(-1, logits.size(-1)),

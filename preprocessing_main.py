@@ -8,55 +8,108 @@ from tokenize_sequences import TokenSequencer
 
 from pathlib import Path
 import pandas as pd
-import json
 import os
 
-def main():
 
+def main():
     print("START!")
 
-    # 1) Extract patient-level events
-    # extractor = PatientLevelEventExtractor()
-    # extractor.start_extraction()
+    # ------------------------------------------------------------------
+    # Paths (based on what your other scripts expect)
+    # ------------------------------------------------------------------
+    OUT_BASE = Path("../out")
+    MERGE_DIR = OUT_BASE / "merge_and_sort"
+    COMBINED_CSV = MERGE_DIR / "combined.csv"
 
-    # Short version for debugging
-    # extractor = PatientLevelEventExtractor_Short()
-    # extractor.start_extraction()
+    SPLIT_DIR = OUT_BASE / "splits_out"
+    TRAIN_CSV = SPLIT_DIR / "combined_train.csv"
+    VAL_CSV = SPLIT_DIR / "combined_val.csv"
+    TEST_CSV = SPLIT_DIR / "combined_test.csv"
 
-    # 2) Sort and merge events
-    # sort_merger = SortMerger()
-    # sort_merger.sort_and_merge()
+    FINAL_OUT = OUT_BASE / "out"
+    VOCAB_PATH = FINAL_OUT / "vocab" / "vocabulary.json"
+    SEQ_DIR = FINAL_OUT / "sequences"
 
-    # 2.1) Add time tokens
-    # event_sequencer = EventSequencer()
-    # sequences = event_sequencer.add_time_tokens_to_data()
-    # os.remove("../out/merge_and_sort/combined.csv")
-    # os.rename("../out/merge_and_sort/combined2.csv", "../out/merge_and_sort/combined.csv")
+    # ------------------------------------------------------------------
+    # (1) Extract patient-level events (run if merged file missing)
+    # ------------------------------------------------------------------
+    # If you want the short debug version, set USE_SHORT_EXTRACT=True.
+    USE_SHORT_EXTRACT = False
 
-    # 3) Train/val/test split
-    # splitter = DataSplitter()
-    # splitter.split_dataset()
+    if not COMBINED_CSV.exists():
+        print("[1] combined.csv missing -> ensure extracted events exist (running extractor)...")
+        if USE_SHORT_EXTRACT:
+            extractor = PatientLevelEventExtractor_Short()
+        else:
+            extractor = PatientLevelEventExtractor()
+        extractor.start_extraction()
+    else:
+        print("[1] combined.csv exists -> skipping extraction")
 
-    # 4) Build vocabulary
-    # vocab = Vocabulary()
-    # vocab.build_vocabulary()
+    # ------------------------------------------------------------------
+    # (2) Sort & merge -> ensures ../out/merge_and_sort/combined.csv exists
+    # ------------------------------------------------------------------
+    if not COMBINED_CSV.exists():
+        print(f"[2] running SortMerger to create: {COMBINED_CSV}")
+        sort_merger = SortMerger()
+        sort_merger.sort_and_merge()
+    else:
+        print(f"[2] combined.csv exists -> skipping SortMerger: {COMBINED_CSV}")
 
-    # 5) Build patient event sequences
-    # for COMBINED_CSV, OUT_IDS in [
-    #     ("../out/splits_out/combined_train.csv", "ids.json"),
-    #     ("../out/splits_out/combined_test.csv", "test_ids.json"),
-    #     ("../out/splits_out/combined_val.csv", "val_ids.json"),
-    # ]:
-    #     df = pd.read_csv(COMBINED_CSV)
-    #     event_sequencer = EventSequencer()
-    #     sequences = event_sequencer.build_patient_event_sequences(df, vocab)
-    #     del df
+    if not COMBINED_CSV.exists():
+        raise FileNotFoundError(
+            f"Expected combined.csv after SortMerger, but still missing: {COMBINED_CSV.resolve()}"
+        )
 
-    #     # 6) Tokenize sequences
-    #     token_sequencer = TokenSequencer()
-    #     out_dir = Path("../out/sequences")
-    #     out_dir.mkdir(parents=True, exist_ok=True)
-    #     token_sequencer.build_sequences(sequences, False, out_dir / OUT_IDS)
+    # ------------------------------------------------------------------
+    # (3) Split -> ensures train/val/test csv exist
+    # ------------------------------------------------------------------
+    if not (TRAIN_CSV.exists() and VAL_CSV.exists() and TEST_CSV.exists()):
+        print(f"[3] split CSVs missing -> running DataSplitter into: {SPLIT_DIR}")
+        splitter = DataSplitter()
+        splitter.split_dataset()
+    else:
+        print("[3] split CSVs exist -> skipping DataSplitter")
+
+    # ------------------------------------------------------------------
+    # (4) Vocabulary: load if exists, else build (build uses combined_train.csv)
+    # ------------------------------------------------------------------
+    if VOCAB_PATH.exists() and hasattr(Vocabulary, "load"):
+        print(f"[4] Loading vocabulary: {VOCAB_PATH}")
+        vocab = Vocabulary.load(VOCAB_PATH)
+    else:
+        print(f"[4] Building vocabulary (expects train split): {TRAIN_CSV}")
+        vocab = Vocabulary()
+        vocab.build_vocabulary()
+
+    # ------------------------------------------------------------------
+    # (5+6) Build sequences + tokenize -> ids.json / val_ids.json / test_ids.json
+    # ------------------------------------------------------------------
+    SEQ_DIR.mkdir(parents=True, exist_ok=True)
+
+    jobs = [
+        (TRAIN_CSV, "ids.json"),
+        (VAL_CSV, "val_ids.json"),
+        (TEST_CSV, "test_ids.json"),
+    ]
+
+    for combined_path, out_name in jobs:
+        if not combined_path.exists():
+            raise FileNotFoundError(f"Missing required split file: {combined_path.resolve()}")
+
+        out_path = SEQ_DIR / out_name
+        print(f"[5+6] {combined_path} -> {out_path}")
+
+        df = pd.read_csv(combined_path)
+        event_sequencer = EventSequencer()
+        sequences = event_sequencer.build_patient_event_sequences(df, vocab)
+        del df
+
+        token_sequencer = TokenSequencer()
+        token_sequencer.build_sequences(sequences, False, out_path)
+
+    print("DONE!")
+
 
 if __name__ == "__main__":
     main()
