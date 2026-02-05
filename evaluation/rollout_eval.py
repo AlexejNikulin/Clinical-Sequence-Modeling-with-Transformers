@@ -19,7 +19,7 @@ This script supports two common formats:
     {
       "patient_id": "...",
       "token_ids": [ ... ],
-      "event_type_ids": [ ... ]  
+      "event_type_ids": [ ... ]  ---op
     }
 
 (2) One record per PATIENT with explicit sequences:
@@ -41,23 +41,26 @@ Run
 python -m evaluation.rollout_eval \
   --jsonl data/eval_val.jsonl \
   --ckpt checkpoints/mlm_baseline.pt
-  --end_ids DISCHARGE_ID,DEATH_ID \
+  --disch_start 77000 --disch_end 77010 \
+  --death_start 77010 --death_end 77011 \
   --max_len 256 \
   --max_new_tokens 256 \
   --out_jsonl results/rollout_mlm_baseline.jsonl 
 
 python -m evaluation.rollout_eval \
   --jsonl data/eval_val.jsonl \
-  --ckpt checkpoints/mlm_d384.pt
-  --end_ids DISCHARGE_ID,DEATH_ID \
+  --ckpt checkpoints/mlm_d384.pt \
+  --disch_start 77000 --disch_end 77010 \
+  --death_start 77010 --death_end 77011 \
   --max_len 256 \
   --max_new_tokens 256 \
-  --out_jsonl results/rollout_mlm_d384.jsonl 
+  --out_jsonl results/rollout_mlm_d384.jsonl
 
 python -m evaluation.rollout_eval \
   --jsonl data/eval_val.jsonl \
   --ckpt checkpoints/mlm_n_event_types_7.pt
-  --end_ids DISCHARGE_ID,DEATH_ID \
+  --disch_start 77000 --disch_end 77010 \
+  --death_start 77010 --death_end 77011 \
   --max_len 256 \
   --max_new_tokens 256 \
   --out_jsonl results/rollout_mlm_n_event_types_7.jsonl 
@@ -65,7 +68,8 @@ python -m evaluation.rollout_eval \
 python -m evaluation.rollout_eval \
   --jsonl data/eval_val.jsonl \
   --ckpt checkpoints/mlm_n_heads_12_n_layer_6.pt
-  --end_ids DISCHARGE_ID,DEATH_ID \
+  --disch_start 77000 --disch_end 77010 \
+  --death_start 77010 --death_end 77011 \
   --max_len 256 \
   --max_new_tokens 256 \
   --out_jsonl results/rollout_mlm_n_heads_12_n_layer_6.jsonl 
@@ -73,7 +77,8 @@ python -m evaluation.rollout_eval \
 python -m evaluation.rollout_eval \
   --jsonl data/eval_val.jsonl \
   --ckpt checkpoints/mlm_n_heads_12.pt 
-  --end_ids DISCHARGE_ID,DEATH_ID \
+  --disch_start 77000 --disch_end 77010 \
+  --death_start 77010 --death_end 77011 \
   --max_len 256 \
   --max_new_tokens 256 \
   --out_jsonl results/rollout_mlm_n_heads_12.jsonl 
@@ -81,7 +86,8 @@ python -m evaluation.rollout_eval \
 python -m evaluation.rollout_eval \
   --jsonl data/eval_val.jsonl \
   --ckpt checkpoints/mlm_n_layer_6.pt 
-  --end_ids DISCHARGE_ID,DEATH_ID \
+  --disch_start 77000 --disch_end 77010 \
+  --death_start 77010 --death_end 77011 \
   --max_len 256 \
   --max_new_tokens 256 \
   --out_jsonl results/rollout_mlm_n_layer_6.jsonl
@@ -89,7 +95,8 @@ python -m evaluation.rollout_eval \
 python -m evaluation.rollout_eval \
   --jsonl data/eval_val.jsonl \
   --ckpt checkpoints/mlm_recency.pt
-  --end_ids DISCHARGE_ID,DEATH_ID \
+  --disch_start 77000 --disch_end 77010 \
+  --death_start 77010 --death_end 77011 \
   --max_len 256 \
   --max_new_tokens 256 \
   --out_jsonl results/rollout_mlm_recency.jsonl   
@@ -97,7 +104,8 @@ python -m evaluation.rollout_eval \
 python -m evaluation.rollout_eval \
   --jsonl data/eval_val.jsonl \
   --ckpt checkpoints/mlm_span.pt 
-  --end_ids DISCHARGE_ID,DEATH_ID \
+  --disch_start 77000 --disch_end 77010 \
+  --death_start 77010 --death_end 77011 \
   --max_len 256 \
   --max_new_tokens 256 \
   --out_jsonl results/rollout_mlm_span.jsonl         
@@ -107,6 +115,8 @@ write per-patient outputs:
   --out_jsonl /tmp/rollout_preds.jsonl
 """
 
+# --- rollout_eval.py (patch-style: clean change) ---
+
 from __future__ import annotations
 
 import argparse
@@ -115,7 +125,7 @@ import sys
 import json
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Callable
 
 import torch
 import torch.nn.functional as F
@@ -124,12 +134,13 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from evaluation.clinical_eval_utils import load_jsonl, build_token_id_to_group_from_vocab
+from evaluation.clinical_eval_utils import load_jsonl
 from compact_transformer_encoder import CompactTransformerConfig, CompactTransformerEncoder
 
 
-
+# -------------------------
 # Helpers
+# -------------------------
 def _extract_logits(model_out: Any) -> torch.Tensor:
     if isinstance(model_out, dict) and "logits" in model_out:
         return model_out["logits"]
@@ -204,13 +215,6 @@ def _concat_visits(visits: Sequence[Visit], default_event_type_id: int) -> Tuple
     return toks, ets
 
 
-def _first_end_token(seq: Sequence[int], end_ids: Tuple[int, ...]) -> Optional[int]:
-    for t in seq:
-        if int(t) in end_ids:
-            return int(t)
-    return None
-
-
 def _load_ckpt_and_model(ckpt_path: str, device: torch.device) -> Tuple[CompactTransformerEncoder, CompactTransformerConfig]:
     ckpt = torch.load(ckpt_path, map_location="cpu")
     if not (isinstance(ckpt, dict) and "cfg" in ckpt and "model_state_dict" in ckpt):
@@ -220,6 +224,47 @@ def _load_ckpt_and_model(ckpt_path: str, device: torch.device) -> Tuple[CompactT
     model.load_state_dict(ckpt["model_state_dict"], strict=True)
     model.eval()
     return model, cfg
+
+
+
+# NEW: End-token definition by ranges
+
+@dataclass(frozen=True)
+class EndTokenSpec:
+    """
+    Defines how to detect the "end" during rollout and in ground-truth.
+
+    Common case in our project:
+      - discharge tokens live in [disch_start, disch_end_exclusive)
+      - death tokens live in [death_start, death_end_exclusive) or can be a single id
+
+    we can provide:
+      - discharge range (start inclusive, end exclusive)
+      - death range (start inclusive, end exclusive)
+    """
+    disch_start: int
+    disch_end_exclusive: int
+    death_start: int
+    death_end_exclusive: int
+
+    def classify(self, token_id: int) -> Optional[str]:
+        tid = int(token_id)
+        if self.disch_start <= tid < self.disch_end_exclusive:
+            return "DISCHARGE"
+        if self.death_start <= tid < self.death_end_exclusive:
+            return "DEATH"
+        return None
+
+    def is_end(self, token_id: int) -> bool:
+        return self.classify(token_id) is not None
+
+
+def _first_end_label(seq: Sequence[int], end_spec: EndTokenSpec) -> Optional[str]:
+    for t in seq:
+        lab = end_spec.classify(int(t))
+        if lab is not None:
+            return lab
+    return None
 
 
 @torch.no_grad()
@@ -232,7 +277,7 @@ def rollout_until_end(
     mask_token_id: int,
     pad_token_id: int,
     default_event_type_id: int,
-    end_token_ids: Tuple[int, ...],
+    end_spec: EndTokenSpec,          # <-- NEW
     max_len: int,
     max_new_tokens: int,
     temperature: float = 1.0,
@@ -240,7 +285,7 @@ def rollout_until_end(
 ) -> Dict[str, Any]:
     """
     Repeatedly append [MASK] and predict the masked position.
-    Stop when predicted token is in end_token_ids or limits reached.
+    Stop when predicted token is an end token according to end_spec, or limits reached.
     """
     t0 = time.time()
 
@@ -252,8 +297,14 @@ def rollout_until_end(
 
     ended = False
     end_token: Optional[int] = None
+    end_label: Optional[str] = None
     steps = 0
     end_token_probs: List[Dict[str, float]] = []
+
+    # For logging probabilities, we log the *aggregate* probability mass of discharge-range and death-range.
+    # This avoids enumerating tens/hundreds of discharge IDs.
+    disch_ids = torch.arange(end_spec.disch_start, end_spec.disch_end_exclusive, dtype=torch.long, device=device)
+    death_ids = torch.arange(end_spec.death_start, end_spec.death_end_exclusive, dtype=torch.long, device=device)
 
     while steps < max_new_tokens and len(tokens) < max_len - 1:
         L = len(tokens)
@@ -282,17 +333,25 @@ def rollout_until_end(
 
         probs = F.softmax(logit_vec, dim=-1)
 
-        # log end-token probs per step
-        step_probs = {str(tid): float(probs[tid].item()) for tid in end_token_ids if 0 <= tid < probs.numel()}
+        # log end-token prob mass per step
+        step_probs: Dict[str, float] = {}
+        if disch_ids.numel() > 0 and int(disch_ids[-1]) < probs.numel():
+            step_probs["DISCHARGE_mass"] = float(probs.index_select(0, disch_ids).sum().item())
+        else:
+            step_probs["DISCHARGE_mass"] = 0.0
+
+        if death_ids.numel() > 0 and int(death_ids[-1]) < probs.numel():
+            step_probs["DEATH_mass"] = float(probs.index_select(0, death_ids).sum().item())
+        else:
+            step_probs["DEATH_mass"] = 0.0
+
         end_token_probs.append(step_probs)
 
         if topk_sampling and topk_sampling > 0:
-            # sample from top-k (optional)
             topk = min(int(topk_sampling), probs.numel())
             p, ids = torch.topk(probs, k=topk)
             p = p / p.sum()
-            sampled = int(ids[torch.multinomial(p, 1)].item())
-            pred = sampled
+            pred = int(ids[torch.multinomial(p, 1)].item())
         else:
             pred = int(torch.argmax(logit_vec).item())
 
@@ -300,15 +359,18 @@ def rollout_until_end(
         etypes.append(int(default_event_type_id))
         steps += 1
 
-        if pred in end_token_ids:
+        lab = end_spec.classify(pred)
+        if lab is not None:
             ended = True
             end_token = pred
+            end_label = lab
             break
 
     dt = time.time() - t0
     return {
         "ended": bool(ended),
         "end_token": end_token,
+        "end_label": end_label,  # <-- NEW
         "steps": int(steps),
         "pred_tokens": tokens[len(context_tokens):],
         "runtime_sec": float(dt),
@@ -325,7 +387,7 @@ def run_rollout_eval(
     mask_token_id: int,
     pad_token_id: int,
     default_event_type_id: int,
-    end_token_ids: Tuple[int, ...],
+    end_spec: EndTokenSpec,          # <-- NEW
     max_len: int,
     max_new_tokens: int,
     temperature: float,
@@ -364,7 +426,7 @@ def run_rollout_eval(
             mask_token_id=int(mask_token_id),
             pad_token_id=int(pad_token_id),
             default_event_type_id=int(default_event_type_id),
-            end_token_ids=end_token_ids,
+            end_spec=end_spec,
             max_len=int(max_len),
             max_new_tokens=int(max_new_tokens),
             temperature=float(temperature),
@@ -375,23 +437,24 @@ def run_rollout_eval(
         total_steps += int(pred["steps"])
         total_runtime += float(pred["runtime_sec"])
 
-        gt_end = None
+        gt_label = None
         if gt_tokens is not None:
             n_with_gt += 1
-            gt_end = _first_end_token(gt_tokens, end_token_ids)
-            if gt_end is not None and pred["end_token"] is not None and int(pred["end_token"]) == int(gt_end):
+            gt_label = _first_end_label(gt_tokens, end_spec)
+            if gt_label is not None and pred["end_label"] is not None and pred["end_label"] == gt_label:
                 correct_end += 1
 
         row = {
             "patient_id": pid,
             "n_visits": len(visits),
             "has_ground_truth": gt_tokens is not None,
-            "gt_end_token": gt_end,
-            "pred_end_token": pred["end_token"],
+            "gt_end_label": gt_label,            # <-- NEW (label, not token id)
+            "pred_end_label": pred["end_label"], # <-- NEW
+            "pred_end_token": pred["end_token"], # keep for debugging
             "ended": pred["ended"],
             "steps": pred["steps"],
             "runtime_sec": pred["runtime_sec"],
-            "end_token_probs": pred["end_token_probs"],
+            "end_token_probs": pred["end_token_probs"],  # now contains probability mass per class
             # optional debug:
             # "pred_tokens": pred["pred_tokens"],
         }
@@ -400,8 +463,8 @@ def run_rollout_eval(
     metrics: Dict[str, Any] = {
         "n_patients": int(n_patients),
         "n_with_gt": int(n_with_gt),
-        "end_token_correct": int(correct_end),
-        "end_token_accuracy": (correct_end / n_with_gt) if n_with_gt > 0 else float("nan"),
+        "end_label_correct": int(correct_end),
+        "end_label_accuracy": (correct_end / n_with_gt) if n_with_gt > 0 else float("nan"),
         "ended_fraction": (ended_any / max(1, n_patients)),
         "avg_steps": (total_steps / max(1, n_patients)),
         "avg_runtime_sec": (total_runtime / max(1, n_patients)),
@@ -420,7 +483,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--mask_id", type=int, default=1)
     p.add_argument("--default_event_type_id", type=int, default=1)
 
-    p.add_argument("--end_ids", type=str, required=True, help="Comma-separated end-token ids, e.g. discharge_id,death_id")
+    # NEW: range-based end token config
+    p.add_argument("--disch_start", type=int, default=77000, help="inclusive start id for discharge block")
+    p.add_argument("--disch_end", type=int, default=77010, help="exclusive end id for discharge block")
+    p.add_argument("--death_start", type=int, default=77010, help="inclusive start id for death block")
+    p.add_argument("--death_end", type=int, default=77011, help="exclusive end id for death block (use start+1 for single [DEATH])")
+
     p.add_argument("--max_new_tokens", type=int, default=256)
 
     # optional stochasticity
@@ -443,9 +511,18 @@ def main() -> None:
             "Either retrain with larger max_len or reduce eval max_len."
         )
 
-    end_ids = tuple(int(x) for x in args.end_ids.split(",") if x.strip())
-    if len(end_ids) < 1:
-        raise ValueError("--end_ids must contain at least one integer token id")
+    # validate ranges
+    if not (args.disch_start < args.disch_end):
+        raise ValueError("--disch_start must be < --disch_end")
+    if not (args.death_start < args.death_end):
+        raise ValueError("--death_start must be < --death_end")
+
+    end_spec = EndTokenSpec(
+        disch_start=int(args.disch_start),
+        disch_end_exclusive=int(args.disch_end),
+        death_start=int(args.death_start),
+        death_end_exclusive=int(args.death_end),
+    )
 
     records = load_jsonl(args.jsonl)
     by_pid = _parse_patient_records(records, patient_key=args.patient_key)
@@ -459,7 +536,7 @@ def main() -> None:
         mask_token_id=int(args.mask_id),
         pad_token_id=int(args.pad_id),
         default_event_type_id=int(args.default_event_type_id),
-        end_token_ids=end_ids,
+        end_spec=end_spec,
         max_len=int(args.max_len),
         max_new_tokens=int(args.max_new_tokens),
         temperature=float(args.temperature),
@@ -474,7 +551,10 @@ def main() -> None:
     print(f"device={device}")
     print(f"n_patients={metrics['n_patients']} n_with_gt={metrics['n_with_gt']}")
     if metrics["n_with_gt"] > 0:
-        print(f"end_token_accuracy={metrics['end_token_accuracy']:.4f} ({metrics['end_token_correct']}/{metrics['n_with_gt']})")
+        print(
+            f"end_label_accuracy={metrics['end_label_accuracy']:.4f} "
+            f"({metrics['end_label_correct']}/{metrics['n_with_gt']})"
+        )
     print(f"ended_fraction={metrics['ended_fraction']:.4f}")
     print(f"avg_steps={metrics['avg_steps']:.2f}")
     print(f"avg_runtime_sec={metrics['avg_runtime_sec']:.4f}")

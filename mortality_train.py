@@ -38,7 +38,7 @@ from compact_transformer_encoder import CompactTransformerConfig, CompactTransfo
 freeze_encoder --> linear probe style: 
         python downstream/mortality_train.py \
         --train_jsonl data/mortality_train.jsonl \
-        --val_jsonl data/mortality_val.jsonl \
+        --val_jsonl data/eval_val.jsonl \
         --ckpt checkpoints/mlm_span.pt \
         --freeze_encoder \
         --epochs 10

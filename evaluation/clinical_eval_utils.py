@@ -56,7 +56,21 @@ class ClinicalSequenceDataset(Dataset):
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         r = self.records[idx]
-        token_ids = list(r["token_ids"])
+        token_ids = r.get("token_ids", None)
+        if token_ids is None:
+            token_ids = r.get("ids", None)          # <-- the test_ids.jsonl Format
+        if token_ids is None:
+            token_ids = r.get("input_ids", None)    # optional fallback
+        if token_ids is None:
+            token_ids = r.get("tokens", None)       # optional fallback
+
+        if token_ids is None:
+            raise KeyError(
+                f"Record missing token sequence. Expected one of token_ids/ids/input_ids/tokens. Keys={list(r.keys())}"
+            )
+
+        token_ids = list(token_ids)
+
         event_type_ids = r.get("event_type_ids", None)
         labels = r.get("labels", None)
 
