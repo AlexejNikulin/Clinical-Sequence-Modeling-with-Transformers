@@ -17,6 +17,7 @@ def main():
     # ------------------------------------------------------------------
     # Paths (based on what your other scripts expect)
     # ------------------------------------------------------------------
+    # DataSplitter expects: ../out/merge_and_sort/combined.csv
     OUT_BASE = Path("../out")
     MERGE_DIR = OUT_BASE / "merge_and_sort"
     COMBINED_CSV = MERGE_DIR / "combined.csv"
@@ -31,38 +32,26 @@ def main():
     SEQ_DIR = FINAL_OUT / "sequences"
 
     # ------------------------------------------------------------------
-    # (1) Extract patient-level events (run if merged file missing)
+    # (1) Optional: Extract events (only if you truly need to rebuild)
     # ------------------------------------------------------------------
-    # If you want the short debug version, set USE_SHORT_EXTRACT=True.
-    USE_SHORT_EXTRACT = False
+    # extractor = PatientLevelEventExtractor()
+    # extractor.start_extraction()
 
-    if not COMBINED_CSV.exists():
-        print("[1] combined.csv missing -> ensure extracted events exist (running extractor)...")
-        if USE_SHORT_EXTRACT:
-            extractor = PatientLevelEventExtractor_Short()
-        else:
-            extractor = PatientLevelEventExtractor()
-        extractor.start_extraction()
-    else:
-        print("[1] combined.csv exists -> skipping extraction")
+    # extractor = PatientLevelEventExtractor_Short()
+    # extractor.start_extraction()
 
     # ------------------------------------------------------------------
-    # (2) Sort & merge -> ensures ../out/merge_and_sort/combined.csv exists
+    # (2) Sort & merge -> ensures combined.csv exists
     # ------------------------------------------------------------------
     if not COMBINED_CSV.exists():
-        print(f"[2] running SortMerger to create: {COMBINED_CSV}")
+        print(f"[2] combined.csv missing -> running SortMerger: {COMBINED_CSV}")
         sort_merger = SortMerger()
         sort_merger.sort_and_merge()
     else:
         print(f"[2] combined.csv exists -> skipping SortMerger: {COMBINED_CSV}")
 
-    if not COMBINED_CSV.exists():
-        raise FileNotFoundError(
-            f"Expected combined.csv after SortMerger, but still missing: {COMBINED_CSV.resolve()}"
-        )
-
     # ------------------------------------------------------------------
-    # (3) Split -> ensures train/val/test csv exist
+    # (3) Split -> ensures combined_train/val/test.csv exist
     # ------------------------------------------------------------------
     if not (TRAIN_CSV.exists() and VAL_CSV.exists() and TEST_CSV.exists()):
         print(f"[3] split CSVs missing -> running DataSplitter into: {SPLIT_DIR}")
