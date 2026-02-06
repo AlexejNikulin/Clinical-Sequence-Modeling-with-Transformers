@@ -25,6 +25,7 @@ import argparse
 import os
 import sys
 from typing import Any, Dict, List, Optional
+from tqdm import tqdm
 
 import torch
 from torch.utils.data import DataLoader
@@ -81,7 +82,7 @@ def evaluate_next_event(
     et_top1_vals: List[float] = []
     et_topk_vals = {k: [] for k in topks}
 
-    for batch in loader:
+    for batch in tqdm(loader):
         input_ids = batch["input_ids"].to(device)
         attn = batch["attention_mask"].to(device)
         ev = batch["event_type_ids"].to(device)

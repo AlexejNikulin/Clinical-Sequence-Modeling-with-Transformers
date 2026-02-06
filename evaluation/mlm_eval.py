@@ -33,6 +33,7 @@ import argparse
 import os
 import sys
 import json
+from tqdm import tqdm
 
 from typing import Any, Dict, List, Optional
 
@@ -135,7 +136,7 @@ def evaluate(
     if avoid_random_special:
         avoid_random_ids = [int(pad_id), int(mask_id)]
 
-    for batch in loader:
+    for batch in tqdm(loader):
         input_ids = batch["input_ids"].to(device)
         attn = batch["attention_mask"].to(device)
         ev = batch["event_type_ids"].to(device)
