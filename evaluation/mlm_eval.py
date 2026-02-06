@@ -36,6 +36,22 @@ python -m evaluation.mlm_eval --jsonl data/test_ids.jsonl --ckpt checkpoints/mlm
 python -m evaluation.mlm_eval --jsonl data/test_ids.jsonl --ckpt checkpoints/mlm_n_heads_12.pt --topk 1,5,10 
 
 python -m evaluation.mlm_eval --jsonl data/test_ids.jsonl --ckpt checkpoints/mlm_n_layer_6.pt --topk 1,5,10
+
+python -m evaluation.mlm_eval --jsonl data/test_ids.jsonl --ckpt checkpoints/mlm_p_mlm_0_1.pt --topk 1,5,10
+
+python -m evaluation.mlm_eval --jsonl data/test_ids.jsonl --ckpt checkpoints/mlm_p_mlm_0_2.pt --topk 1,5,10
+
+python -m evaluation.mlm_eval --jsonl data/test_ids.jsonl --ckpt checkpoints/mlm_mask_mode_span.pt --topk 1,5,10
+
+python -m evaluation.mlm_eval --jsonl data/test_ids.jsonl --ckpt checkpoints/mlm_mask_mode_recency.pt --topk 1,5,10
+
+python -m evaluation.mlm_eval --jsonl data/test_ids.jsonl --ckpt checkpoints/mlm_dropout_0_5.pt --topk 1,5,10
+
+python -m evaluation.mlm_eval --jsonl data/test_ids.jsonl --ckpt checkpoints/mlm_dropout_0_15.pt --topk 1,5,10
+
+python -m evaluation.mlm_eval --jsonl data/test_ids.jsonl --ckpt checkpoints/mlm_d_model_384.pt --topk 1,5,10
+
+python -m evaluation.mlm_eval --jsonl data/test_ids.jsonl --ckpt checkpoints/mlm_max_len_384.pt --topk 1,5,10
 '''
 
 from __future__ import annotations
@@ -230,6 +246,24 @@ def main() -> None:
     model.to(device)
 
     records = load_jsonl(args.jsonl)
+    # ---- sanity check: token ids must fit ckpt vocab ----
+    vocab_size = int(model.cfg.vocab_size) if hasattr(model, "cfg") else int(model.token_emb.num_embeddings)
+
+    max_id = -1
+    min_id = 10**18
+    for r in records[:5000]:
+        ids = r.get("token_ids") or r.get("ids") or r.get("input_ids") or r.get("tokens")
+        if ids:
+            max_id = max(max_id, max(ids))
+            min_id = min(min_id, min(ids))
+
+    if min_id < 0 or max_id >= vocab_size:
+        raise ValueError(
+            f"JSONL token id range [{min_id},{max_id}] but checkpoint vocab_size={vocab_size}. "
+            "Use a matching checkpoint OR rebuild the JSONL with the checkpoint's vocabulary."
+        )
+
+    
     # ---- sanity check: token ids must fit ckpt vocab ----
     max_id = -1
     for r in records[:5000]:  # reicht meist, sonst entferne die Begrenzung

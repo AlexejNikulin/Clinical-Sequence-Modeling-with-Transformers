@@ -10,7 +10,7 @@ It does NOT perform any recursive rollout generation; for that see:
 USE PATH: 
 
 python -m evaluation.run_eval_suite \
-  --jsonl data/eval_val.jsonl \
+  --jsonl data/test_ids.jsonl \
   --ckpt checkpoints/mlm_baseline.pt \
   --batch_size 32 \
   --max_len 256 \
@@ -30,7 +30,7 @@ python -m evaluation.run_eval_suite \
   --topk 1,5,10
 
 python -m evaluation.run_eval_suite \
-  --jsonl data/eval_val.jsonl \
+  --jsonl data/test_ids.jsonl \
   --ckpt checkpoints/mlm_n_event_types_7.pt \
   --batch_size 32 \
   --max_len 256 \
@@ -40,7 +40,7 @@ python -m evaluation.run_eval_suite \
   --topk 1,5,10
 
  python -m evaluation.run_eval_suite \
-  --jsonl data/eval_val.jsonl \
+  --jsonl data/test_ids.jsonl \
   --ckpt checkpoints/mlm_n_heads_12_n_layer_6.pt \
   --batch_size 32 \
   --max_len 256 \
@@ -50,7 +50,7 @@ python -m evaluation.run_eval_suite \
   --topk 1,5,10
 
 python -m evaluation.run_eval_suite \
-  --jsonl data/eval_val.jsonl \
+  --jsonl data/test_ids.jsonl \
   --ckpt checkpoints/mlm_n_heads_12.pt \
   --batch_size 32 \
   --max_len 256 \
@@ -60,7 +60,7 @@ python -m evaluation.run_eval_suite \
   --topk 1,5,10
 
 python -m evaluation.run_eval_suite \
-  --jsonl data/eval_val.jsonl \
+  --jsonl data/test_ids.jsonl \
   --ckpt checkpoints/mlm_n_layer_6.pt \
   --batch_size 32 \
   --max_len 256 \
@@ -70,7 +70,7 @@ python -m evaluation.run_eval_suite \
   --topk 1,5,10
 
 python -m evaluation.run_eval_suite \
-  --jsonl data/eval_val.jsonl \
+  --jsonl data/test_ids.jsonl \
   --ckpt checkpoints/mlm_recency.pt \
   --batch_size 32 \
   --max_len 256 \
@@ -80,7 +80,7 @@ python -m evaluation.run_eval_suite \
   --topk 1,5,10  
 
 python -m evaluation.run_eval_suite \
-  --jsonl data/eval_val.jsonl \
+  --jsonl data/test_ids.jsonl \
   --ckpt checkpoints/mlm_span.pt \
   --batch_size 32 \
   --max_len 256 \
