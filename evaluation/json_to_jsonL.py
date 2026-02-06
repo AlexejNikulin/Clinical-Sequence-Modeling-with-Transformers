@@ -2,8 +2,10 @@ import json
 from pathlib import Path
 
 # --- Input e output ---
-INPUT_JSON = Path("../out/sequences/val_ids.json")
-OUTPUT_JSONL = Path("../out/sequences/eval_val.jsonl")
+# for test_id
+INPUT_JSON = Path("../out/sequences/test_ids.json")
+OUTPUT_JSONL = Path("../out/sequences/test_val.jsonl")
+
 
 # --- Carica le sequenze ---
 with open(INPUT_JSON, "r", encoding="utf-8") as f:

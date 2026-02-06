@@ -12,17 +12,24 @@ Supported input format (EXACT):
 Recommended run (IMPORTANT)
 --------------------------
 From repo root (preferred):
-  python3 -m transformer.transformer_train_model
+  python -m transformer.transformer_train_model
 
 Or from transformer/ folder:
   cd transformer
-  python3 transformer_train_model.py
+  python transformer_train_model.py
 """
 
 from __future__ import annotations
 
-from tqdm import tqdm
-import torch.nn.functional as F
+# -------------------------------------------------
+# tqdm is optional (fallback to plain range)
+# -------------------------------------------------
+try:
+    from tqdm import tqdm
+except Exception:  # pragma: no cover
+    def tqdm(x, *args, **kwargs):
+        return x
+
 import os
 import csv
 import json
@@ -32,7 +39,6 @@ import random
 from pathlib import Path
 from dataclasses import asdict
 from typing import Dict, Optional, List, Tuple, Literal
-import json
 
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -49,8 +55,6 @@ except ModuleNotFoundError:
 
 from mlm_masking import mlm_mask_801010, mlm_mask_span_801010, mlm_mask_recency_801010
 from compact_transformer_encoder import CompactTransformerConfig, CompactTransformerEncoder
-from evaluation.next_event_eval import _extract_logits, build_next_event_objective
-from evaluation.clinical_eval_utils import IGNORE_INDEX
 
 
 # =================================================
@@ -64,7 +68,7 @@ def set_seed(seed: int = 0) -> None:
 
 
 # =================================================
-# Änderung 1: Loader für ids.json hinzufügen (oben)
+# Loader for ids.json (joint format)
 # =================================================
 def load_joint_sequences_from_ids(path: Path) -> List[List[List[int]]]:
     """
@@ -91,6 +95,51 @@ def load_joint_sequences_from_ids(path: Path) -> List[List[List[int]]]:
             raise ValueError(f"Invalid sequence at index {i}: expected [[demo],[events]]")
 
     return data
+
+
+# =================================================
+# Device helpers (GPU selection + optional MultiGPU)
+# =================================================
+def resolve_device(
+    *,
+    device_mode: Literal["auto", "cpu", "cuda"],
+    cuda_device: int,
+) -> torch.device:
+    """
+    Resolve torch.device based on CLI args.
+
+    - device_mode=cpu  -> CPU
+    - device_mode=cuda -> requires CUDA
+    - device_mode=auto -> CUDA if available else CPU
+
+    cuda_device selects which CUDA index to use (e.g., 0,1,2,...).
+    """
+    if device_mode == "cpu":
+        return torch.device("cpu")
+
+    if torch.cuda.is_available() and device_mode in ("auto", "cuda"):
+        n = torch.cuda.device_count()
+        if cuda_device < 0 or cuda_device >= n:
+            raise ValueError(
+                f"--cuda_device={cuda_device} is invalid. Available CUDA devices: 0..{n - 1}"
+            )
+        torch.cuda.set_device(cuda_device)
+        return torch.device(f"cuda:{cuda_device}")
+
+    return torch.device("cpu")
+
+
+def parse_gpu_ids(gpu_ids: Optional[str]) -> Optional[List[int]]:
+    """
+    Parse comma-separated GPU ids, e.g. "0,1,2".
+    Returns None if gpu_ids is None.
+    """
+    if gpu_ids is None:
+        return None
+    ids = [int(x.strip()) for x in gpu_ids.split(",") if x.strip() != ""]
+    if len(ids) == 0:
+        raise ValueError("--gpu_ids provided but empty (example: --gpu_ids \"0,1\")")
+    return ids
 
 
 # =================================================
@@ -229,7 +278,7 @@ class TransformerTrainer:
         p_mlm: float,
         device: torch.device,
         mask_demo: bool = False,
-        mask_mode: Literal["token", "span", "recency"] = "token"
+        mask_mode: Literal["token", "span", "recency"] = "token",
     ) -> Dict[str, torch.Tensor]:
         input_ids = batch["input_ids"].to(device)
         attention_mask = batch["attention_mask"].to(device)
@@ -282,7 +331,12 @@ class TransformerTrainer:
     def ensure_dir(self, path: str) -> None:
         os.makedirs(path, exist_ok=True)
 
-    def make_run_log_path(self, experiment_name: str = None, base_dir: str = "logs", prefix: str = "train_log") -> str:
+    def make_run_log_path(
+        self,
+        experiment_name: str = None,
+        base_dir: str = "logs",
+        prefix: str = "train_log",
+    ) -> Tuple[str, str]:
         self.ensure_dir(base_dir)
         stamp = time.strftime("%Y%m%d_%H%M%S")
 
@@ -312,13 +366,13 @@ class TransformerTrainer:
         seed: int = 0,
         mask_demo: bool = False,
         mask_mode: Literal["token", "span", "recency"] = "token",
-        log_every: int = 10,
+        log_every: int = 1000,
         experiment_name: str = None,
         lr_decay: bool = False,
-    ):
+        device: torch.device = torch.device("cpu"),
+        gpu_ids: Optional[List[int]] = None,
+    ) -> None:
         set_seed(seed)
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
         loader = make_dataloader(
             input_ids,
             attention_mask,
@@ -333,9 +387,42 @@ class TransformerTrainer:
             batch_size,
         )
 
-        model = CompactTransformerEncoder(cfg).to(device)
+        # Build model
+        model: torch.nn.Module = CompactTransformerEncoder(cfg)
+
+        # Optional DataParallel for multi-GPU
+        if gpu_ids is not None:
+            if not torch.cuda.is_available():
+                raise RuntimeError("CUDA not available but --gpu_ids was set")
+
+            n = torch.cuda.device_count()
+            for gid in gpu_ids:
+                if gid < 0 or gid >= n:
+                    raise ValueError(f"GPU id {gid} invalid. Available: 0..{n - 1}")
+
+            torch.cuda.set_device(gpu_ids[0])
+            device = torch.device(f"cuda:{gpu_ids[0]}")
+
+            model = model.to(device)
+            model = torch.nn.DataParallel(model, device_ids=gpu_ids)
+        else:
+            model = model.to(device)
+
         optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
-        lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda epoch: 1.0) if not lr_decay else torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=1.0, end_factor=0.0, total_iters=steps)
+
+        if not lr_decay:
+            lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
+                optimizer,
+                lr_lambda=lambda epoch: 1.0,
+            )
+        else:
+            lr_scheduler = torch.optim.lr_scheduler.LinearLR(
+                optimizer,
+                start_factor=1.0,
+                end_factor=0.0,
+                total_iters=steps,
+            )
+
         model.train()
 
         log_path, checkpoint_path = self.make_run_log_path(experiment_name=experiment_name)
@@ -347,12 +434,15 @@ class TransformerTrainer:
         print("=== Training config ===")
         print(asdict(cfg))
         print(f"device={device}")
+        if gpu_ids is not None:
+            print(f"multi_gpu(DataParallel) gpu_ids={gpu_ids}")
         print(f"log_path={log_path}")
         print(f"steps={steps}")
         print("=======================\n")
 
         data_iter = iter(loader)
         val_iter = iter(val_loader)
+
         total_loss = 0.0
         total_loss_count = 0
 
@@ -378,6 +468,7 @@ class TransformerTrainer:
 
             loss = out["loss"]
             loss.backward()
+
             total_loss += float(loss.item())
             total_loss_count += 1
 
@@ -393,53 +484,41 @@ class TransformerTrainer:
             masked_ratio = n_masked / max(1, n_valid)
 
             if step % log_every == 0:
-                # Calculate validation loss
+                # Calculate validation loss (MLM, same objective as training)
                 model.eval()
 
                 VAL_BATCHES = 10
                 total_val_loss = 0.0
+                val_batches_used = 0
+
                 for _ in range(VAL_BATCHES):
                     try:
                         val_batch = next(val_iter)
                     except StopIteration:
-                        val_iter = iter(loader)
+                        val_iter = iter(val_loader)
                         val_batch = next(val_iter)
-                    
-                    input_ids = val_batch["input_ids"].to(device)
-                    attention_mask = val_batch["attention_mask"].to(device)
-                    event_type_ids = val_batch["event_type_ids"].to(device)
 
-                    masked_ids, labels = build_next_event_objective(
-                        input_ids,
-                        attention_mask,
-                        event_type_ids,
-                        mask_token_id=vocab.token_to_id(vocab.get_masking_token()),
+                    val_mlm_batch = self.make_mlm_batch(
+                        val_batch,
+                        vocab=vocab,
+                        vocab_size=cfg.vocab_size,
+                        p_mlm=p_mlm,
+                        device=device,
+                        mask_demo=mask_demo,
+                        mask_mode=mask_mode,
                     )
 
-                    out = model(
-                        input_ids=masked_ids,
-                        attention_mask=attention_mask,
-                        event_type_ids=event_type_ids,
-                        labels=None,
-                        return_hidden=False,
-                    )
-                    logits = _extract_logits(out)
+                    out_val = model(**val_mlm_batch)
+                    total_val_loss += float(out_val["loss"].item())
+                    val_batches_used += 1
 
-                    val_loss = F.cross_entropy(
-                        logits.view(-1, logits.size(-1)),
-                        labels.view(-1),
-                        ignore_index=IGNORE_INDEX,
-                        reduction="mean",
-                    )
-                    total_val_loss += float(val_loss.item())
-
-                val_loss = total_val_loss / VAL_BATCHES
+                val_loss = total_val_loss / max(1, val_batches_used)
                 model.train()
 
-                # Print stats
-                train_loss = total_loss / total_loss_count
+                train_loss = total_loss / max(1, total_loss_count)
                 total_loss = 0.0
                 total_loss_count = 0
+
                 print(
                     f"[step {step:4d}] "
                     f"loss={train_loss:.4f} "
@@ -464,7 +543,14 @@ class TransformerTrainer:
                     )
 
         os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
-        torch.save(model.state_dict(), checkpoint_path)
+
+        # Save correctly when DataParallel is used
+        state_dict = (
+            model.module.state_dict()
+            if isinstance(model, torch.nn.DataParallel)
+            else model.state_dict()
+        )
+        torch.save(state_dict, checkpoint_path)
 
         print("\nTraining finished.")
         print(f"Logs written to {log_path}")
@@ -472,7 +558,7 @@ class TransformerTrainer:
 
 
 # =================================================
-# Änderung 2: main() minimal anpassen
+# main()
 # =================================================
 def main() -> None:
     import argparse
@@ -497,10 +583,15 @@ def main() -> None:
     parser.add_argument("--activation", type=str, default="gelu", choices=["gelu", "relu", "silu"])
     parser.add_argument("--no_event_types", action="store_true")
 
-    # IMPORTANT: defaults relative to repo root
-    parser.add_argument("--ids_path", type=str, default="../out/sequences/ids.json")
-    parser.add_argument("--val_ids_path", type=str, default="../out/sequences/val_ids.json")
-    parser.add_argument("--vocab_path", type=str, default="../out/vocab/vocabulary.json")
+    # GPU selection
+    parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda"])
+    parser.add_argument("--cuda_device", type=int, default=0)
+    parser.add_argument("--gpu_ids", type=str, default=None, help='e.g. "0,1" for DataParallel')
+
+    # Paths (relative to repo root)
+    parser.add_argument("--ids_path", type=str, default="out/sequences/ids.json")
+    parser.add_argument("--val_ids_path", type=str, default="out/sequences/val_ids.json")
+    parser.add_argument("--vocab_path", type=str, default="out/vocab/vocabulary.json")
     parser.add_argument("--experiment_name", type=str, default=None)
     args = parser.parse_args()
 
@@ -510,9 +601,15 @@ def main() -> None:
     val_ids_path = (Path(args.val_ids_path) if Path(args.val_ids_path).is_absolute() else repo_root / args.val_ids_path).resolve()
     vocab_path = (Path(args.vocab_path) if Path(args.vocab_path).is_absolute() else repo_root / args.vocab_path).resolve()
 
+    gpu_ids = parse_gpu_ids(args.gpu_ids)
+    if gpu_ids is None:
+        device = resolve_device(device_mode=args.device, cuda_device=args.cuda_device)
+    else:
+        # device will be set inside trainer to cuda:<gpu_ids[0]>
+        device = torch.device("cpu")
+
     # Load Vocabulary
     vocab = Vocabulary.load(vocab_path)
-
     pad_id = vocab.token_to_id(vocab.get_padding_token())
     mask_id = vocab.token_to_id(vocab.get_masking_token())
     sep_id = _get_optional_sep_id(vocab)
@@ -570,7 +667,9 @@ def main() -> None:
         mask_mode=args.mask_mode,
         log_every=1000,
         experiment_name=args.experiment_name,
-        lr_decay=args.lr_decay
+        lr_decay=args.lr_decay,
+        device=device,
+        gpu_ids=gpu_ids,
     )
 
 

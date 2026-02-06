@@ -25,6 +25,17 @@ python -m evaluation.mlm_eval --jsonl data/eval_val.jsonl --ckpt checkpoints/mlm
 python -m evaluation.mlm_eval --jsonl data/eval_val.jsonl --ckpt checkpoints/mlm_span.pt --topk 1,5,10 
 
 
+PATH FOR test_ides.jsonl: vocab_size = 77011
+
+python -m evaluation.mlm_eval --jsonl data/test_ids.jsonl --ckpt checkpoints/mlm_baseline.pt --topk 1,5,10
+
+python -m evaluation.mlm_eval --jsonl data/test_ids.jsonl --ckpt checkpoints/mlm_n_event_types_7.pt --topk 1,5,10 
+
+python -m evaluation.mlm_eval --jsonl data/test_ids.jsonl --ckpt checkpoints/mlm_n_heads_12_n_layer_6.pt --topk 1,5,10 
+
+python -m evaluation.mlm_eval --jsonl data/test_ids.jsonl --ckpt checkpoints/mlm_n_heads_12.pt --topk 1,5,10 
+
+python -m evaluation.mlm_eval --jsonl data/test_ids.jsonl --ckpt checkpoints/mlm_n_layer_6.pt --topk 1,5,10
 '''
 
 from __future__ import annotations
@@ -219,6 +230,18 @@ def main() -> None:
     model.to(device)
 
     records = load_jsonl(args.jsonl)
+    # ---- sanity check: token ids must fit ckpt vocab ----
+    max_id = -1
+    for r in records[:5000]:  # reicht meist, sonst entferne die Begrenzung
+        ids = r.get("token_ids") or r.get("ids") or r.get("input_ids") or r.get("tokens")
+        if ids:
+            max_id = max(max_id, max(ids))
+    if max_id >= int(cfg.vocab_size):
+        raise ValueError(
+            f"JSONL contains token id {max_id} but checkpoint vocab_size={cfg.vocab_size}. "
+            "You are using a dataset/vocabulary that does not match this checkpoint."
+        )
+
     ds = ClinicalSequenceDataset(
         records,
         max_len=args.max_len,
