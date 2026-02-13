@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import re
 import torch
@@ -41,6 +43,7 @@ FILES = {
     "mlm_recency.pt": {
         "ckpt": "train_log_20260203_235424_mask_mode_recency.pth",
     },
+<<<<<<< HEAD
     "mlm_p_mlm_0.1.pt": {
         "ckpt": "train_log_20260204_030943_p_mlm_0.1.pth",
     },
@@ -86,20 +89,83 @@ def infer_cfg(sd: dict, *, meta: dict) -> dict:
     activation = meta.get("activation", "gelu")
     norm_first = meta.get("norm_first", False)
     rms_norm = meta.get("rms_norm", False)
+=======
+    "mlm_mask_mode_span.pt": {
+        "ckpt": "train_log_20260203_160942_mask_mode_span.pth",
+        "n_heads": 6,
+        "n_layers": 3,
+    },
+    "mlm_dropout_0_5.pt": {
+        "ckpt": "train_log_20260204_143210_dropout_5.pth",
+        "n_heads": 6,
+        "n_layers": 3,
+    },
+    "mlm_p_mlm_0_2.pt": {
+        "ckpt": "train_log_20260204_062431_p_mlm_0.2.pth",
+        "n_heads": 6,
+        "n_layers": 3,
+    },
+    "mlm_mask_mode_recency.pt": {
+        "ckpt": "train_log_20260203_235424_mask_mode_recency.pth",
+        "n_heads": 6,
+        "n_layers": 3,
+    },
+    "mlm_p_mlm_0_1.pt": {
+        "ckpt": "train_log_20260204_030943_p_mlm_0.1.pth",
+        "n_heads": 6,
+        "n_layers": 3,
+    },
+    "mlm_max_len_384.pt": {
+        "ckpt": "train_log_20260201_151819_max_len_384.pth",
+        "n_heads": 6,
+        "n_layers": 3,
+    },
+    "mlm_d_model_384.pt": {
+        "ckpt": "train_log_20260201_195853_d_model_384.pth",
+        "n_heads": 6,
+        "n_layers": 3,
+    },
+    "mlm_dropout_0_15.pt": {
+        "ckpt": "train_log_20260204_111524_dropout_15.pth",
+        "n_heads": 6,
+        "n_layers": 3,
+    },
+}
+
+
+
+def infer_cfg(sd: dict, *, n_heads: int, n_layers_expected: int | None = None) -> dict:
+    """
+    Infer a CompactTransformer config from a raw state_dict (sd).
+
+    Requirements:
+      - sd contains token_emb.weight and pos_emb.weight
+      - encoder layer weights follow keys like: encoder.layers.{i}.*
+      - optional event_type_emb.weight exists if event-type embeddings were used
+    """
+    if "token_emb.weight" not in sd:
+        raise KeyError("Missing key in state_dict: token_emb.weight")
+    if "pos_emb.weight" not in sd:
+        raise KeyError("Missing key in state_dict: pos_emb.weight")
+    if "encoder.layers.0.linear1.weight" not in sd:
+        raise KeyError("Missing key in state_dict: encoder.layers.0.linear1.weight")
+>>>>>>> d713f51 (update Eval-  Last token prediction)
 
     vocab_size, d_model = sd["token_emb.weight"].shape
     max_len = sd["pos_emb.weight"].shape[0]
     d_ff = sd["encoder.layers.0.linear1.weight"].shape[0]
 
-    # infer n_layers from keys (robust)
+    # Infer n_layers from encoder layer indices (robust to different depths)
     layer_ids = set()
     for k in sd.keys():
         m = re.search(r"encoder\.layers\.(\d+)\.", k)
         if m:
             layer_ids.add(int(m.group(1)))
     n_layers_inferred = (max(layer_ids) + 1) if layer_ids else 0
+    if n_layers_inferred <= 0:
+        raise ValueError("Could not infer n_layers from state_dict keys (no encoder.layers.* found)")
 
-    # optional sanity check against expected
+    # Optional sanity check against expected
     if n_layers_expected is not None and n_layers_inferred != n_layers_expected:
         raise ValueError(
             f"n_layers mismatch: inferred={n_layers_inferred} expected={n_layers_expected}"
@@ -108,7 +174,7 @@ def infer_cfg(sd: dict, *, meta: dict) -> dict:
     use_event = "event_type_emb.weight" in sd
     n_event_types = int(sd["event_type_emb.weight"].shape[0]) if use_event else 0
 
-    # sanity check: d_model must be divisible by n_heads
+    # Sanity check: d_model must be divisible by n_heads
     if d_model % n_heads != 0:
         raise ValueError(f"d_model={d_model} not divisible by n_heads={n_heads}")
 
@@ -131,20 +197,42 @@ def infer_cfg(sd: dict, *, meta: dict) -> dict:
     }
 
 
-for out_name, meta in FILES.items():
-    in_path = os.path.join(RAW_DIR, meta["ckpt"])
-    out_path = os.path.join(OUT_DIR, out_name)
+def main() -> None:
+    # Validate FILES upfront (fail-fast with clear error)
+    for out_name, meta in FILES.items():
+        if "ckpt" not in meta:
+            raise KeyError(f"FILES[{out_name}] missing required key: 'ckpt'")
+        if "n_heads" not in meta:
+            raise KeyError(f"FILES[{out_name}] missing required key: 'n_heads'")
+        if "n_layers" not in meta:
+            raise KeyError(f"FILES[{out_name}] missing required key: 'n_layers'")
 
-    if not os.path.exists(in_path):
-        raise FileNotFoundError(f"Missing raw checkpoint: {in_path}")
+    for out_name, meta in FILES.items():
+        in_path = os.path.join(RAW_DIR, meta["ckpt"])
+        out_path = os.path.join(OUT_DIR, out_name)
 
+<<<<<<< HEAD
     sd = torch.load(in_path, map_location="cpu")
     cfg = infer_cfg(sd, meta=meta)
+=======
+        if not os.path.exists(in_path):
+            raise FileNotFoundError(f"Missing raw checkpoint: {in_path}")
+>>>>>>> d713f51 (update Eval-  Last token prediction)
 
-    torch.save({"cfg": cfg, "model_state_dict": sd}, out_path)
+        sd = torch.load(in_path, map_location="cpu")
+        if not isinstance(sd, dict):
+            raise TypeError(f"Expected a state_dict dict in {in_path}, got {type(sd)}")
 
-    print(f"[OK] {out_path}")
-    print(
-        f"cfg: d_model={cfg['d_model']}, n_layers={cfg['n_layers']}, n_heads={cfg['n_heads']}, "
-        f"use_event={cfg['use_event_type_embeddings']}, n_event_types={cfg['n_event_types']}"
-    )
+        cfg = infer_cfg(sd, n_heads=meta["n_heads"], n_layers_expected=meta["n_layers"])
+
+        torch.save({"cfg": cfg, "model_state_dict": sd}, out_path)
+
+        print(f"[OK] {out_path}")
+        print(
+            f"cfg: d_model={cfg['d_model']}, n_layers={cfg['n_layers']}, n_heads={cfg['n_heads']}, "
+            f"use_event={cfg['use_event_type_embeddings']}, n_event_types={cfg['n_event_types']}"
+        )
+
+
+if __name__ == "__main__":
+    main()

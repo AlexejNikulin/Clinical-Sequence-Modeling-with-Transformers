@@ -39,16 +39,16 @@ If event_type_ids are missing, we will:
 Run
 ---
 python -m evaluation.rollout_eval \
-  --jsonl data/eval_val.jsonl \
-  --ckpt checkpoints/mlm_baseline.pt
+  --jsonl data/test_ids.jsonl \
+  --ckpt checkpoints/mlm_baseline.pt \
   --disch_start 77000 --disch_end 77010 \
   --death_start 77010 --death_end 77011 \
   --max_len 256 \
   --max_new_tokens 256 \
-  --out_jsonl results/rollout_mlm_baseline.jsonl 
+  --out_jsonl results/rollout_mlm_baseline.jsonl
 
 python -m evaluation.rollout_eval \
-  --jsonl data/eval_val.jsonl \
+  --jsonl data/test_ids.jsonl \
   --ckpt checkpoints/mlm_d384.pt \
   --disch_start 77000 --disch_end 77010 \
   --death_start 77010 --death_end 77011 \
@@ -57,7 +57,7 @@ python -m evaluation.rollout_eval \
   --out_jsonl results/rollout_mlm_d384.jsonl
 
 python -m evaluation.rollout_eval \
-  --jsonl data/eval_val.jsonl \
+  --jsonl data/test_ids.jsonl \
   --ckpt checkpoints/mlm_n_event_types_7.pt
   --disch_start 77000 --disch_end 77010 \
   --death_start 77010 --death_end 77011 \
@@ -66,7 +66,7 @@ python -m evaluation.rollout_eval \
   --out_jsonl results/rollout_mlm_n_event_types_7.jsonl 
 
 python -m evaluation.rollout_eval \
-  --jsonl data/eval_val.jsonl \
+  --jsonl data/test_ids.jsonl \
   --ckpt checkpoints/mlm_n_heads_12_n_layer_6.pt
   --disch_start 77000 --disch_end 77010 \
   --death_start 77010 --death_end 77011 \
@@ -75,7 +75,7 @@ python -m evaluation.rollout_eval \
   --out_jsonl results/rollout_mlm_n_heads_12_n_layer_6.jsonl 
 
 python -m evaluation.rollout_eval \
-  --jsonl data/eval_val.jsonl \
+  --jsonl data/test_ids.jsonl \
   --ckpt checkpoints/mlm_n_heads_12.pt 
   --disch_start 77000 --disch_end 77010 \
   --death_start 77010 --death_end 77011 \
@@ -84,7 +84,7 @@ python -m evaluation.rollout_eval \
   --out_jsonl results/rollout_mlm_n_heads_12.jsonl 
 
 python -m evaluation.rollout_eval \
-  --jsonl data/eval_val.jsonl \
+  --jsonl data/test_ids.jsonl \
   --ckpt checkpoints/mlm_n_layer_6.pt 
   --disch_start 77000 --disch_end 77010 \
   --death_start 77010 --death_end 77011 \
@@ -93,7 +93,7 @@ python -m evaluation.rollout_eval \
   --out_jsonl results/rollout_mlm_n_layer_6.jsonl
 
 python -m evaluation.rollout_eval \
-  --jsonl data/eval_val.jsonl \
+  --jsonl data/test_ids.jsonl \
   --ckpt checkpoints/mlm_recency.pt
   --disch_start 77000 --disch_end 77010 \
   --death_start 77010 --death_end 77011 \
@@ -102,7 +102,7 @@ python -m evaluation.rollout_eval \
   --out_jsonl results/rollout_mlm_recency.jsonl   
 
 python -m evaluation.rollout_eval \
-  --jsonl data/eval_val.jsonl \
+  --jsonl data/test_ids.jsonl \
   --ckpt checkpoints/mlm_span.pt 
   --disch_start 77000 --disch_end 77010 \
   --death_start 77010 --death_end 77011 \
@@ -172,31 +172,65 @@ def _parse_patient_records(records: List[Dict[str, Any]], *, patient_key: str) -
           {"patient_id":..., "sequences":[{"token_ids":[...], "event_type_ids":[...]}, ...]}
       (2) per-visit format:
           {"patient_id":..., "token_ids":[...], "event_type_ids":[...]}  # one visit per row
+      (3) wrapped format:
+          {"ids": {...}}   # common in some pipelines
+      (4) minimal tokens-only format:
+          {"ids": [ ... ]}  # no explicit patient id -> we synthesize one
     """
     by_pid: Dict[str, List[Visit]] = {}
 
-    for r in records:
-        if patient_key not in r:
-            raise KeyError(f"Missing '{patient_key}' in record keys={list(r.keys())}")
-        pid = str(r[patient_key])
+    # helper: pick a patient id from common keys
+    def _get_pid(rec: Dict[str, Any], fallback: str) -> str:
+        for k in [patient_key, "patient_id", "subject_id", "pid"]:
+            if k in rec:
+                return str(rec[k])
+        return fallback
 
+    # helper: pick token list from common keys
+    def _get_tokens(rec: Dict[str, Any]) -> List[int]:
+        for k in ["token_ids", "tokens", "input_ids"]:
+            if k in rec and rec[k] is not None:
+                return _ensure_list(rec[k])
+        # allow "ids" to be token ids if it is a list
+        if "ids" in rec and isinstance(rec["ids"], list):
+            return _ensure_list(rec["ids"])
+        return []
+
+    for i, r0 in enumerate(records):
+        r = r0
+
+        # unwrap {"ids": {...}} if present
+        if "ids" in r and isinstance(r["ids"], dict):
+            r = r["ids"]
+
+        pid = _get_pid(r, fallback=f"row_{i:06d}")
+
+        # case: per-patient with sequences
         if "sequences" in r and isinstance(r["sequences"], list):
             visits: List[Visit] = []
             for v in r["sequences"]:
-                if not isinstance(v, dict) or "token_ids" not in v:
-                    raise ValueError("Each element of 'sequences' must be a dict with key 'token_ids'")
-                token_ids = _ensure_list(v["token_ids"])
+                if not isinstance(v, dict):
+                    raise ValueError("Each element of 'sequences' must be a dict")
+                token_ids = _ensure_list(v.get("token_ids", v.get("tokens", v.get("input_ids", v.get("ids", None)))))
+                if not token_ids:
+                    raise ValueError("Each visit in 'sequences' must contain token ids (token_ids/tokens/input_ids/ids).")
                 et = v.get("event_type_ids", None)
                 visits.append(Visit(token_ids=token_ids, event_type_ids=_ensure_list(et) if et is not None else None))
             by_pid[pid] = visits
             continue
 
-        token_ids = _ensure_list(r.get("token_ids", r.get("tokens", None)))
+        # case: per-visit (single visit row)
+        token_ids = _get_tokens(r)
         if not token_ids:
-            raise KeyError("Record missing 'token_ids' (or 'tokens')")
+            raise KeyError(
+                "Record missing token ids. Expected one of: token_ids, tokens, input_ids, or ids(list). "
+                f"Got keys={list(r.keys())}"
+            )
 
         et = r.get("event_type_ids", None)
-        by_pid.setdefault(pid, []).append(Visit(token_ids=token_ids, event_type_ids=_ensure_list(et) if et is not None else None))
+        by_pid.setdefault(pid, []).append(
+            Visit(token_ids=token_ids, event_type_ids=_ensure_list(et) if et is not None else None)
+        )
 
     return by_pid
 
