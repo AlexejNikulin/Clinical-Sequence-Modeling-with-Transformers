@@ -568,6 +568,7 @@ def main() -> None:
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--max_len", type=int, default=256)
     parser.add_argument("--d_model", type=int, default=192)
+    parser.add_argument("--d_ff", type=int, default=768)
     parser.add_argument("--n_layers", type=int, default=3)
     parser.add_argument("--n_heads", type=int, default=6)
     parser.add_argument("--n_event_types", type=int, default=2)
@@ -632,6 +633,7 @@ def main() -> None:
         activation=args.activation,
         norm_first=args.norm_first,
         rms_norm=args.rms_norm,
+        d_ff=args.d_ff
     )
 
     input_ids, attention_mask, segment_ids = build_from_joint_format(
