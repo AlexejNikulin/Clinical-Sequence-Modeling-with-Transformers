@@ -43,7 +43,6 @@ FILES = {
     "mlm_recency.pt": {
         "ckpt": "train_log_20260203_235424_mask_mode_recency.pth",
     },
-<<<<<<< HEAD
     "mlm_p_mlm_0.1.pt": {
         "ckpt": "train_log_20260204_030943_p_mlm_0.1.pth",
     },
@@ -78,63 +77,17 @@ FILES = {
     "mlm_activation_relu.pt": {
         "ckpt": "train_log_20260205_221730_activation_relu.pth",
         "activation": "relu",
+    },
+    "mlm_big_1.pt": {
+        "ckpt": "train_log_20260213_154758_big-1.pth",
+        "n_layers": 10,
+        "d_model": 768,
+        "n_heads": 12,
+        "norm_first": True,
     }
 }
 
-
 def infer_cfg(sd: dict, *, meta: dict) -> dict:
-    n_heads = meta.get("n_heads", 6)
-    n_layers_expected = meta.get("n_layers", 3)
-    dropout = meta.get("dropout", 0.1)
-    activation = meta.get("activation", "gelu")
-    norm_first = meta.get("norm_first", False)
-    rms_norm = meta.get("rms_norm", False)
-=======
-    "mlm_mask_mode_span.pt": {
-        "ckpt": "train_log_20260203_160942_mask_mode_span.pth",
-        "n_heads": 6,
-        "n_layers": 3,
-    },
-    "mlm_dropout_0_5.pt": {
-        "ckpt": "train_log_20260204_143210_dropout_5.pth",
-        "n_heads": 6,
-        "n_layers": 3,
-    },
-    "mlm_p_mlm_0_2.pt": {
-        "ckpt": "train_log_20260204_062431_p_mlm_0.2.pth",
-        "n_heads": 6,
-        "n_layers": 3,
-    },
-    "mlm_mask_mode_recency.pt": {
-        "ckpt": "train_log_20260203_235424_mask_mode_recency.pth",
-        "n_heads": 6,
-        "n_layers": 3,
-    },
-    "mlm_p_mlm_0_1.pt": {
-        "ckpt": "train_log_20260204_030943_p_mlm_0.1.pth",
-        "n_heads": 6,
-        "n_layers": 3,
-    },
-    "mlm_max_len_384.pt": {
-        "ckpt": "train_log_20260201_151819_max_len_384.pth",
-        "n_heads": 6,
-        "n_layers": 3,
-    },
-    "mlm_d_model_384.pt": {
-        "ckpt": "train_log_20260201_195853_d_model_384.pth",
-        "n_heads": 6,
-        "n_layers": 3,
-    },
-    "mlm_dropout_0_15.pt": {
-        "ckpt": "train_log_20260204_111524_dropout_15.pth",
-        "n_heads": 6,
-        "n_layers": 3,
-    },
-}
-
-
-
-def infer_cfg(sd: dict, *, n_heads: int, n_layers_expected: int | None = None) -> dict:
     """
     Infer a CompactTransformer config from a raw state_dict (sd).
 
@@ -149,7 +102,13 @@ def infer_cfg(sd: dict, *, n_heads: int, n_layers_expected: int | None = None) -
         raise KeyError("Missing key in state_dict: pos_emb.weight")
     if "encoder.layers.0.linear1.weight" not in sd:
         raise KeyError("Missing key in state_dict: encoder.layers.0.linear1.weight")
->>>>>>> d713f51 (update Eval-  Last token prediction)
+
+    n_heads = meta.get("n_heads", 6)
+    n_layers_expected = meta.get("n_layers", 3)
+    dropout = meta.get("dropout", 0.1)
+    activation = meta.get("activation", "gelu")
+    norm_first = meta.get("norm_first", False)
+    rms_norm = meta.get("rms_norm", False)
 
     vocab_size, d_model = sd["token_emb.weight"].shape
     max_len = sd["pos_emb.weight"].shape[0]
@@ -202,28 +161,16 @@ def main() -> None:
     for out_name, meta in FILES.items():
         if "ckpt" not in meta:
             raise KeyError(f"FILES[{out_name}] missing required key: 'ckpt'")
-        if "n_heads" not in meta:
-            raise KeyError(f"FILES[{out_name}] missing required key: 'n_heads'")
-        if "n_layers" not in meta:
-            raise KeyError(f"FILES[{out_name}] missing required key: 'n_layers'")
 
     for out_name, meta in FILES.items():
         in_path = os.path.join(RAW_DIR, meta["ckpt"])
         out_path = os.path.join(OUT_DIR, out_name)
 
-<<<<<<< HEAD
-    sd = torch.load(in_path, map_location="cpu")
-    cfg = infer_cfg(sd, meta=meta)
-=======
-        if not os.path.exists(in_path):
-            raise FileNotFoundError(f"Missing raw checkpoint: {in_path}")
->>>>>>> d713f51 (update Eval-  Last token prediction)
-
         sd = torch.load(in_path, map_location="cpu")
         if not isinstance(sd, dict):
             raise TypeError(f"Expected a state_dict dict in {in_path}, got {type(sd)}")
 
-        cfg = infer_cfg(sd, n_heads=meta["n_heads"], n_layers_expected=meta["n_layers"])
+        cfg = infer_cfg(sd, meta=meta)
 
         torch.save({"cfg": cfg, "model_state_dict": sd}, out_path)
 

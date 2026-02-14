@@ -371,6 +371,7 @@ class TransformerTrainer:
         lr_decay: bool = False,
         device: torch.device = torch.device("cpu"),
         gpu_ids: Optional[List[int]] = None,
+        disable_validation: bool = False,
     ) -> None:
         set_seed(seed)
         loader = make_dataloader(
@@ -487,10 +488,10 @@ class TransformerTrainer:
                 # Calculate validation loss (MLM, same objective as training)
                 model.eval()
 
-                VAL_BATCHES = 10
+                VAL_BATCHES = 10 if not disable_validation else 0
                 total_val_loss = 0.0
                 val_batches_used = 0
-
+                
                 for _ in range(VAL_BATCHES):
                     try:
                         val_batch = next(val_iter)
@@ -579,6 +580,7 @@ def main() -> None:
     parser.add_argument("--lr_decay", type=bool, default=False)
     parser.add_argument("--norm_first", type=bool, default=False)
     parser.add_argument("--rms_norm", type=bool, default=False)
+    parser.add_argument("--disable_validation", type=bool, default=False)
     parser.add_argument("--mask_demo", action="store_true")
     parser.add_argument("--mask_mode", type=str, default="token", choices=["token", "span", "recency"])
     parser.add_argument("--activation", type=str, default="gelu", choices=["gelu", "relu", "silu"])
@@ -590,9 +592,9 @@ def main() -> None:
     parser.add_argument("--gpu_ids", type=str, default=None, help='e.g. "0,1" for DataParallel')
 
     # Paths (relative to repo root)
-    parser.add_argument("--ids_path", type=str, default="out/sequences/ids.json")
-    parser.add_argument("--val_ids_path", type=str, default="out/sequences/val_ids.json")
-    parser.add_argument("--vocab_path", type=str, default="out/vocab/vocabulary.json")
+    parser.add_argument("--ids_path", type=str, default="../out/sequences/ids.json")
+    parser.add_argument("--val_ids_path", type=str, default="../out/sequences/val_ids.json")
+    parser.add_argument("--vocab_path", type=str, default="../out/vocab/vocabulary.json")
     parser.add_argument("--experiment_name", type=str, default=None)
     args = parser.parse_args()
 
@@ -672,6 +674,7 @@ def main() -> None:
         lr_decay=args.lr_decay,
         device=device,
         gpu_ids=gpu_ids,
+        disable_validation=args.disable_validation,
     )
 
 
