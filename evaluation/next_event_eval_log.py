@@ -58,6 +58,7 @@ import os
 import sys
 from typing import Any, Dict, List, Optional
 from tqdm import tqdm
+import random  # <-- CHANGED
 
 import torch
 from torch.utils.data import DataLoader
@@ -106,7 +107,8 @@ def evaluate_next_event(
     mask_id: int,
     topks: List[int],
     token_id_to_group: Optional[Dict[int, int]] = None,
-    max_batches: int | None = None
+    max_batches: int | None = None,
+    log_random_n: int = 0,  # <-- CHANGED
 ) -> Dict[str, float]:
     model.eval()
 
@@ -115,6 +117,27 @@ def evaluate_next_event(
 
     et_top1_vals: List[float] = []
     et_topk_vals = {k: [] for k in topks}
+
+    # --- CHANGED: pick random global indices from the actually evaluated subset ---
+    n_log = max(0, int(log_random_n))
+    to_log_global: set[int] = set()
+    if n_log > 0:
+        try:
+            ds_len = len(loader.dataset)  # type: ignore[attr-defined]
+
+            # If we limit by max_batches, only sample from the part we actually iterate over
+            if max_batches is not None:
+                bs = loader.batch_size or 1
+                eval_cap = min(ds_len, int(max_batches) * int(bs))
+            else:
+                eval_cap = ds_len
+
+            n_log = min(n_log, eval_cap)
+            to_log_global = set(random.sample(range(eval_cap), k=n_log))
+        except Exception:
+            to_log_global = set()
+
+    seen_samples = 0  # <-- CHANGED (global sample index in loader order)
 
     for step, batch in enumerate(tqdm(loader), start=1):
         if max_batches is not None and step > max_batches:
@@ -128,17 +151,43 @@ def evaluate_next_event(
         labels = torch.full((B, L), IGNORE_INDEX, dtype=torch.long, device=device)
 
         x = input_ids.clone()
+        last_idxs: List[int] = [-1] * B  # <-- CHANGED: remember last index per sample for logging
+
         for b in range(B):
             valid = (attn[b] == 1).nonzero(as_tuple=False).view(-1)
             if valid.numel() < 1:
                 continue
             last_idx = int(valid[-1].item())
+            last_idxs[b] = last_idx  # <-- CHANGED
+
             y = int(x[b, last_idx].item())
             labels[b, last_idx] = y
             x[b, last_idx] = int(mask_id)
 
         out = model(input_ids=x, attention_mask=attn, event_type_ids=ev, labels=labels, return_hidden=False)
         logits = out["logits"]
+
+        # --- CHANGED: log random samples (sequence analyzed, prediction, correct) ---
+        if to_log_global:
+            pred_ids = torch.argmax(logits, dim=-1)  # [B, L]
+            for b in range(B):
+                gidx = seen_samples + b
+                # print("gidx in to_log_global:", gidx in to_log_global)
+                # print("last_idxs[b] >= 0:", last_idxs[b] >= 0)
+                if gidx in to_log_global and last_idxs[b] >= 0:
+                    li = last_idxs[b]
+
+                    seq_analyzed = x[b].detach().cpu().tolist()
+                    pred_token_id = int(pred_ids[b, li].item())
+                    gold_token_id = int(labels[b, li].item())
+
+                    print("\n" + "=" * 80)
+                    print(f"[Random sample gidx={gidx}]")
+                    print(f"Sequence analyzed (masked): {seq_analyzed}")
+                    print(f"Prediction token_id:        {pred_token_id}")
+                    print(f"Correct token_id:           {gold_token_id}")
+                    print("=" * 80 + "\n")
+        # ------------------------------------------------------------------------
 
         for k in topks:
             res = topk_accuracy_from_logits(logits, labels, k=k)
@@ -151,6 +200,8 @@ def evaluate_next_event(
             et_top1_vals.append(event_type_top1_acc_from_logits(logits, labels, token_id_to_group))
             for k in topks:
                 et_topk_vals[k].append(event_type_topk_acc_from_logits(logits, labels, token_id_to_group, k=k))
+
+        seen_samples += B  # <-- CHANGED
 
     metrics: Dict[str, float] = {}
     for k in topks:
@@ -206,7 +257,8 @@ def main() -> None:
         mask_id=int(args.mask_id),
         topks=topks,
         token_id_to_group=token_id_to_group,
-        max_batches=5
+        max_batches=5,
+        log_random_n=3,  # <-- CHANGED: log 3 random sequences
     )
 
     print(f"device={device}")
