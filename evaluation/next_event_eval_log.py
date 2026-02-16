@@ -47,8 +47,6 @@ python -m evaluation.next_event_eval --jsonl data/test_ids.jsonl --ckpt checkpoi
 python -m evaluation.next_event_eval --jsonl data/test_ids.jsonl --ckpt checkpoints/mlm_d_model_384.pt --topk 1,5,10 --mask_id 1
 
 python -m evaluation.next_event_eval --jsonl data/test_ids.jsonl --ckpt checkpoints/mlm_max_len_384.pt --topk 1,5,10 --mask_id 1
-
-
 '''
 
 from __future__ import annotations
@@ -69,24 +67,19 @@ if REPO_ROOT not in sys.path:
 
 from evaluation.clinical_eval_utils import (
     ClinicalSequenceDataset,
-    IGNORE_INDEX,
     load_jsonl,
-    mrr_from_logits,
-    topk_accuracy_from_logits,
     build_token_id_to_group_from_vocab,
-    event_type_top1_acc_from_logits,
-    event_type_topk_acc_from_logits,
 )
 
 from compact_transformer_encoder import CompactTransformerConfig, CompactTransformerEncoder
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Next-event evaluation: predict next token at end of sequence (zero-shot).")
+    p = argparse.ArgumentParser(description="Next-event generation: predict following tokens until stop token is predicted.")
     p.add_argument("--jsonl", type=str, required=True)
     p.add_argument("--ckpt", type=str, required=True)
 
-    p.add_argument("--vocab_path", type=str, default=None, help="Path to vocabulary.json (for event-type eval).")
+    p.add_argument("--vocab_path", type=str, default=None, help="Path to vocabulary.json (optional).")
 
     p.add_argument("--batch_size", type=int, default=32)
     p.add_argument("--max_len", type=int, default=256)
@@ -94,6 +87,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--mask_id", type=int, default=1)
     p.add_argument("--default_event_type_id", type=int, default=1)
     p.add_argument("--topk", type=str, default="1,5,10")
+
+    # --- CHANGED: generation control ---
+    p.add_argument("--stop_ids", type=str, default="70000, 70001, 70002, 70003, 70004, 70005, 70006, 70007, 70008, 70010", help="Comma-separated stop token IDs.")
+    p.add_argument("--gen_max_steps", type=int, default=50, help="Safety cap for generated tokens per sequence.")
+    # -------------------------------
+
     return p.parse_args()
 
 
@@ -104,19 +103,14 @@ def evaluate_next_event(
     loader: DataLoader,
     *,
     device: torch.device,
-    mask_id: int,
-    topks: List[int],
+    pad_id: int,
+    stop_ids: set[int],
+    gen_max_steps: int,
     token_id_to_group: Optional[Dict[int, int]] = None,
     max_batches: int | None = None,
-    log_random_n: int = 0,  # <-- CHANGED
+    log_random_n: int = 0,
 ) -> Dict[str, float]:
     model.eval()
-
-    totals = {k: {"correct": 0, "total": 0} for k in topks}
-    mrr_vals: List[float] = []
-
-    et_top1_vals: List[float] = []
-    et_topk_vals = {k: [] for k in topks}
 
     # --- CHANGED: pick random global indices from the actually evaluated subset ---
     n_log = max(0, int(log_random_n))
@@ -124,100 +118,126 @@ def evaluate_next_event(
     if n_log > 0:
         try:
             ds_len = len(loader.dataset)  # type: ignore[attr-defined]
-
-            # If we limit by max_batches, only sample from the part we actually iterate over
             if max_batches is not None:
                 bs = loader.batch_size or 1
                 eval_cap = min(ds_len, int(max_batches) * int(bs))
             else:
                 eval_cap = ds_len
-
             n_log = min(n_log, eval_cap)
             to_log_global = set(random.sample(range(eval_cap), k=n_log))
         except Exception:
             to_log_global = set()
+    # ---------------------------------------------------------------------------
 
-    seen_samples = 0  # <-- CHANGED (global sample index in loader order)
+    seen_samples = 0
+    total_generated = 0
+    total_sequences = 0
+    total_stopped = 0
 
     for step, batch in enumerate(tqdm(loader), start=1):
         if max_batches is not None and step > max_batches:
             break
 
-        input_ids = batch["input_ids"].to(device)
-        attn = batch["attention_mask"].to(device)
-        ev = batch["event_type_ids"].to(device)
+        input_ids = batch["input_ids"].to(device)          # [B, L]
+        attn = batch["attention_mask"].to(device)          # [B, L]
+        ev = batch["event_type_ids"].to(device)            # [B, L]
 
         B, L = input_ids.shape
-        labels = torch.full((B, L), IGNORE_INDEX, dtype=torch.long, device=device)
+        total_sequences += B
 
-        x = input_ids.clone()
-        last_idxs: List[int] = [-1] * B  # <-- CHANGED: remember last index per sample for logging
-
+        # --- CHANGED: per-sample autoregressive-ish generation without masking ---
+        # IMPORTANT: This uses logits at the current last valid position to predict the next token,
+        # then appends that token into the next padding slot (attn==0), repeating until stop token.
         for b in range(B):
-            valid = (attn[b] == 1).nonzero(as_tuple=False).view(-1)
+            gidx = seen_samples + b
+
+            xg = input_ids[b].clone()
+            ag = attn[b].clone()
+            eg = ev[b].clone()
+
+            # find last valid position (ag==1)
+            valid = (ag == 1).nonzero(as_tuple=False).view(-1)
             if valid.numel() < 1:
                 continue
-            last_idx = int(valid[-1].item())
-            last_idxs[b] = last_idx  # <-- CHANGED
+            cur_last = int(valid[-1].item())
 
-            y = int(x[b, last_idx].item())
-            labels[b, last_idx] = y
-            x[b, last_idx] = int(mask_id)
+            preds_list: List[int] = []
 
-        out = model(input_ids=x, attention_mask=attn, event_type_ids=ev, labels=labels, return_hidden=False)
-        logits = out["logits"]
+            for _ in range(max(1, int(gen_max_steps))):
+                # find next append position (first padding slot)
+                pad_pos = (ag == 0).nonzero(as_tuple=False).view(-1)
 
-        # --- CHANGED: log random samples (sequence analyzed, prediction, correct) ---
-        if to_log_global:
-            pred_ids = torch.argmax(logits, dim=-1)  # [B, L]
-            for b in range(B):
-                gidx = seen_samples + b
-                # print("gidx in to_log_global:", gidx in to_log_global)
-                # print("last_idxs[b] >= 0:", last_idxs[b] >= 0)
-                if gidx in to_log_global and last_idxs[b] >= 0:
-                    li = last_idxs[b]
+                # --- CHANGED: if no padding slot is available, free one via sliding window ---
+                if pad_pos.numel() == 0:
+                    # shift left by 1 to free the last slot
+                    xg = torch.roll(xg, shifts=-1, dims=0)
+                    ag = torch.roll(ag, shifts=-1, dims=0)
+                    eg = torch.roll(eg, shifts=-1, dims=0)
 
-                    seq_analyzed = x[b].detach().cpu().tolist()
-                    pred_token_id = int(pred_ids[b, li].item())
-                    gold_token_id = int(labels[b, li].item())
+                    # make the last position an explicit free slot
+                    xg[-1] = int(pad_id)
+                    ag[-1] = 0
+                    eg[-1] = eg[-2] if L >= 2 else eg[-1]
 
-                    print("\n" + "=" * 80)
-                    print(f"[Random sample gidx={gidx}]")
-                    print(f"Sequence analyzed (masked): {seq_analyzed}")
-                    print(f"Prediction token_id:        {pred_token_id}")
-                    print(f"Correct token_id:           {gold_token_id}")
-                    print("=" * 80 + "\n")
-        # ------------------------------------------------------------------------
+                    # recompute last valid position
+                    valid2 = (ag == 1).nonzero(as_tuple=False).view(-1)
+                    if valid2.numel() < 1:
+                        break
+                    cur_last = int(valid2[-1].item())
 
-        for k in topks:
-            res = topk_accuracy_from_logits(logits, labels, k=k)
-            totals[k]["correct"] += res.correct
-            totals[k]["total"] += res.total
+                    pad_pos = (ag == 0).nonzero(as_tuple=False).view(-1)
+                    if pad_pos.numel() == 0:
+                        break
+                # ---------------------------------------------------------------------------
 
-        mrr_vals.append(mrr_from_logits(logits, labels))
+                gen_pos = int(pad_pos[0].item())
 
-        if token_id_to_group is not None:
-            et_top1_vals.append(event_type_top1_acc_from_logits(logits, labels, token_id_to_group))
-            for k in topks:
-                et_topk_vals[k].append(event_type_topk_acc_from_logits(logits, labels, token_id_to_group, k=k))
+                outg = model(
+                    input_ids=xg.unsqueeze(0),
+                    attention_mask=ag.unsqueeze(0),
+                    event_type_ids=eg.unsqueeze(0),
+                    labels=None,
+                    return_hidden=False,
+                )
+                lg = outg["logits"][0]  # [L, V]
 
-        seen_samples += B  # <-- CHANGED
+                # Predict "next token" using logits at current last valid position (no masking)
+                pred_tok = int(torch.argmax(lg[cur_last]).item())
+                preds_list.append(pred_tok)
 
-    metrics: Dict[str, float] = {}
-    for k in topks:
-        c = totals[k]["correct"]
-        t = totals[k]["total"]
-        metrics[f"next_event_top{k}_acc"] = c / t if t else float("nan")
+                if pred_tok in stop_ids:
+                    total_stopped += 1
+                    break
 
-    metrics["next_event_mrr"] = float(sum(mrr_vals) / max(1, len(mrr_vals)))
+                # append predicted token into padding slot
+                xg[gen_pos] = pred_tok
+                ag[gen_pos] = 1
+                eg[gen_pos] = eg[cur_last]  # keep event type consistent
+                cur_last = gen_pos
 
-    if token_id_to_group is not None and len(et_top1_vals) > 0:
-        metrics["next_event_event_type_top1_acc"] = float(sum(et_top1_vals) / len(et_top1_vals))
-        for k in topks:
-            xs = et_topk_vals[k]
-            metrics[f"next_event_event_type_top{k}_acc"] = float(sum(xs) / len(xs)) if xs else float("nan")
+            total_generated += len(preds_list)
 
-    return metrics
+            if gidx in to_log_global:
+                seq_seed = input_ids[b].detach().cpu().tolist()
+                seq_final = xg.detach().cpu().tolist()
+
+                print("\n" + "=" * 80)
+                print(f"[Random sample gidx={gidx}]")
+                print(f"Seed sequence (as given):   {seq_seed}")
+                print(f"Predictions token_id list:  {preds_list}")
+                #print(f"Final sequence (with preds):{seq_final}")
+                print("=" * 80 + "\n")
+        # ----------------------------------------------------------------------
+
+        seen_samples += B
+
+    return {
+        "sequences_seen": float(total_sequences),
+        "tokens_generated_total": float(total_generated),
+        "tokens_generated_avg": float(total_generated) / max(1.0, float(total_sequences)),
+        "sequences_stopped": float(total_stopped),
+        "sequences_stopped_frac": float(total_stopped) / max(1.0, float(total_sequences)),
+    }
 
 
 def _load_ckpt_and_model(ckpt_path: str) -> CompactTransformerEncoder:
@@ -239,10 +259,13 @@ def main() -> None:
     model.to(device)
 
     records = load_jsonl(args.jsonl)
-    ds = ClinicalSequenceDataset(records, max_len=args.max_len, pad_id=args.pad_id, default_event_type_id=args.default_event_type_id)
+    ds = ClinicalSequenceDataset(
+        records,
+        max_len=args.max_len,
+        pad_id=args.pad_id,
+        default_event_type_id=args.default_event_type_id
+    )
     loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False)
-
-    topks = [int(x) for x in args.topk.split(",") if x.strip()]
 
     token_id_to_group = None
     if args.vocab_path:
@@ -250,15 +273,18 @@ def main() -> None:
         vocab = Vocabulary.load(args.vocab_path)
         token_id_to_group = build_token_id_to_group_from_vocab(vocab)
 
+    stop_ids = {int(x) for x in args.stop_ids.split(",") if x.strip()}
+
     metrics = evaluate_next_event(
         model,
         loader,
         device=device,
-        mask_id=int(args.mask_id),
-        topks=topks,
+        pad_id=int(args.pad_id),
+        stop_ids=stop_ids,
+        gen_max_steps=int(args.gen_max_steps),
         token_id_to_group=token_id_to_group,
         max_batches=5,
-        log_random_n=3,  # <-- CHANGED: log 3 random sequences
+        log_random_n=3,
     )
 
     print(f"device={device}")
