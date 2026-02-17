@@ -152,118 +152,87 @@ def _get_optional_sep_id(vocab) -> Optional[int]:
         return vocab.token_to_id(vocab.get_sep_token())
     return None
 
-
-def build_joint_sequences(
-    *,
-    demographics: List[List[int]],
-    events: List[List[int]],
-    max_len: int,
-    pad_id: int,
-    sep_id: Optional[int] = None,
-) -> Tuple[List[List[int]], List[List[int]], List[List[int]]]:
-    if len(demographics) != len(events):
-        raise ValueError("demographics/events length mismatch")
-
-    input_ids_all, attn_all, seg_all = [], [], []
-
-    for demo_tok, event_tok in zip(demographics, events):
-        seq: List[int] = []
-        seg: List[int] = []
-
-        # demo block
-        seq.extend(demo_tok)
-        seg.extend([0] * len(demo_tok))
-
-        # optional separator (still demo segment)
-        if sep_id is not None:
-            seq.append(sep_id)
-            seg.append(0)
-
-        # events block
-        seq.extend(event_tok)
-        seg.extend([1] * len(event_tok))
-
-        # clip
-        seq = seq[:max_len]
-        seg = seg[:max_len]
-
-        # attention mask
-        attn = [0 if tok == pad_id else 1 for tok in seq]
-
-        # pad
-        while len(seq) < max_len:
-            seq.append(pad_id)
-            attn.append(0)
-            seg.append(0)
-
-        input_ids_all.append(seq)
-        attn_all.append(attn)
-        seg_all.append(seg)
-
-    return input_ids_all, attn_all, seg_all
-
-
-def build_from_joint_format(
-    *,
-    joint_data: List[List[List[int]]],
-    max_len: int,
-    pad_id: int,
-    sep_id: Optional[int] = None,
-) -> Tuple[List[List[int]], List[List[int]], List[List[int]]]:
-    demographics, events = [], []
-
-    for i, item in enumerate(joint_data):
-        if not isinstance(item, list) or len(item) != 2:
-            raise ValueError(f"Invalid entry at index {i}: {item}")
-        demo_tok, event_tok = item
-        demographics.append(demo_tok)
-        events.append(event_tok)
-
-    return build_joint_sequences(
-        demographics=demographics,
-        events=events,
-        max_len=max_len,
-        pad_id=pad_id,
-        sep_id=sep_id,
-    )
-
-
 # =================================================
 # Dataset / DataLoader
 # =================================================
-class SequenceDataset(Dataset):
+class SequenceDataset2(Dataset):
     def __init__(
-        self,
-        input_ids: List[List[int]],
-        attention_mask: List[List[int]],
-        segment_ids: Optional[List[List[int]]] = None,
-    ):
-        self.input_ids = input_ids
-        self.attention_mask = attention_mask
-        self.segment_ids = segment_ids
-
+            self,
+            sequences: List[List[List[int]]],
+            max_len: int,
+            pad_id: int,
+            sep_id: Optional[int] = None,
+            use_event_type_embeddings: bool = False,
+        ):
+        self.sequences = sequences
+        self.max_len = max_len
+        self.pad_id = pad_id
+        self.sep_id = sep_id
+        self.use_event_type_embeddings = use_event_type_embeddings
+    
     def __len__(self) -> int:
-        return len(self.input_ids)
-
+        return len(self.sequences)
+    
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        demographics, events = self.sequences[idx]
+
+        seq: List[int] = []
+        seg: List[int] = []
+
+        # Put demographic tokens first
+        seq.extend(demographics)
+        seg.extend([0] * len(demographics))
+
+        if self.sep_id is not None:
+            seq.append(self.sep_id)
+            seg.append(0)
+        
+        # Fill the rest up with events
+        event_token_num = self.max_len - len(seq)
+        event_end_idx = len(events) - event_token_num
+        if event_end_idx <= 0:
+            # Everything fits into the context window
+            seq.extend(events)
+            seg.extend([1] * len(events))
+            attn = [0 if tok == self.pad_id else 1 for tok in seq]
+
+            # Padding
+            while len(seq) < self.max_len:
+                seq.append(self.pad_id)
+                seg.append(0)
+                attn.append(0)
+        else:
+            # Randomly select a start index in the events list
+            start_idx = torch.randint(0, event_end_idx + 1, size=(1,)).item()
+            end_idx = start_idx + event_token_num
+
+            # Add these events to the sequence
+            seq.extend(events[start_idx:end_idx])
+            seg.extend([1] * event_token_num)
+            attn = [0 if tok == self.pad_id else 1 for tok in seq]
+
+        assert(len(seq) == len(seg))
+        assert(len(seq) == len(attn))
+        assert(len(seq) == self.max_len)
+
         out = {
-            "input_ids": torch.tensor(self.input_ids[idx], dtype=torch.long),
-            "attention_mask": torch.tensor(self.attention_mask[idx], dtype=torch.long),
+            "input_ids": torch.tensor(seq, dtype=torch.long),
+            "attention_mask": torch.tensor(attn, dtype=torch.long),
         }
-        if self.segment_ids is not None:
-            out["event_type_ids"] = torch.tensor(self.segment_ids[idx], dtype=torch.long)
+        if self.use_event_type_embeddings:
+            out["event_type_ids"] = torch.tensor(seg, dtype=torch.long)
         return out
 
-
-def make_dataloader(
-    input_ids: List[List[int]],
-    attention_mask: List[List[int]],
-    segment_ids: Optional[List[List[int]]] = None,
+def make_dataloader2(
+    sequences: List[List[List[int]]],
+    max_len: int,
+    pad_id: int,
+    sep_id: Optional[int] = None,
+    use_event_type_embeddings: bool = False,
     batch_size: int = 16,
 ) -> DataLoader:
-    ds = SequenceDataset(input_ids, attention_mask, segment_ids)
+    ds = SequenceDataset2(sequences, max_len, pad_id, sep_id, use_event_type_embeddings)
     return DataLoader(ds, batch_size=batch_size, shuffle=True, drop_last=True)
-
 
 # =================================================
 # Trainer
@@ -352,12 +321,8 @@ class TransformerTrainer:
         self,
         *,
         vocab,
-        input_ids: List[List[int]],
-        attention_mask: List[List[int]],
-        segment_ids: Optional[List[List[int]]],
-        val_input_ids: List[List[int]],
-        val_attention_mask: List[List[int]],
-        val_segment_ids: Optional[List[List[int]]],
+        sequences: List[List[List[int]]],
+        val_sequences: List[List[List[int]]],
         cfg: CompactTransformerConfig,
         steps: int,
         batch_size: int,
@@ -374,17 +339,21 @@ class TransformerTrainer:
         disable_validation: bool = False,
     ) -> None:
         set_seed(seed)
-        loader = make_dataloader(
-            input_ids,
-            attention_mask,
-            segment_ids if cfg.use_event_type_embeddings else None,
+        loader = make_dataloader2(
+            sequences,
+            cfg.max_len,
+            cfg.pad_token_id,
+            cfg.sep_token_id,
+            cfg.use_event_type_embeddings,
             batch_size,
         )
 
-        val_loader = make_dataloader(
-            val_input_ids,
-            val_attention_mask,
-            val_segment_ids if cfg.use_event_type_embeddings else None,
+        val_loader = make_dataloader2(
+            val_sequences,
+            cfg.max_len,
+            cfg.pad_token_id,
+            cfg.sep_token_id,
+            cfg.use_event_type_embeddings,
             batch_size,
         )
 
@@ -631,6 +600,7 @@ def main() -> None:
         n_event_types=args.n_event_types,
         pad_token_id=pad_id,
         mask_token_id=mask_id,
+        sep_token_id=sep_id,
         dropout=args.dropout,
         activation=args.activation,
         norm_first=args.norm_first,
@@ -638,31 +608,13 @@ def main() -> None:
         d_ff=args.d_ff
     )
 
-    input_ids, attention_mask, segment_ids = build_from_joint_format(
-        joint_data=joint_sequences,
-        max_len=cfg.max_len,
-        pad_id=cfg.pad_token_id,
-        sep_id=sep_id,
-    )
-
-    val_input_ids, val_attention_mask, val_segment_ids = build_from_joint_format(
-        joint_data=val_joint_sequences,
-        max_len=cfg.max_len,
-        pad_id=cfg.pad_token_id,
-        sep_id=sep_id,
-    )
-
     trainer = TransformerTrainer()
     trainer.train_mlm(
         vocab=vocab,
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        segment_ids=segment_ids,
-        val_input_ids=val_input_ids,
-        val_attention_mask=val_attention_mask,
-        val_segment_ids=val_segment_ids,
+        sequences=joint_sequences,
+        val_sequences=val_joint_sequences,
         cfg=cfg,
-        steps=int(args.epochs * len(input_ids) / args.batch_size),
+        steps=int(args.epochs * len(joint_sequences) / args.batch_size),
         batch_size=args.batch_size,
         lr=args.lr,
         p_mlm=args.p_mlm,

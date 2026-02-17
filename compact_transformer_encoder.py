@@ -29,6 +29,7 @@ class CompactTransformerConfig:
     # Special token ids (use our Vocabulary IDs)
     pad_token_id: int = 0
     mask_token_id: int = 1
+    sep_token_id: Optional[int] = None
 
     activation: str = "gelu"
 
