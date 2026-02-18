@@ -84,6 +84,13 @@ FILES = {
         "d_model": 768,
         "n_heads": 12,
         "norm_first": True,
+    },
+    "mlm_big_1_fixed.pt": {
+        "ckpt": "train_log_20260217_195657_big-1.pth",
+        "n_layers": 10,
+        "d_model": 768,
+        "n_heads": 12,
+        "norm_first": True,
     }
 }
 
