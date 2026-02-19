@@ -314,7 +314,7 @@ class TransformerTrainer:
             filename += f"_{experiment_name}"
 
         log_path = os.path.join(base_dir, f"{filename}.csv")
-        checkpoint_path = os.path.join("checkpoints", f"{filename}.pth")
+        checkpoint_path = os.path.join("checkpoints_raw", f"{filename}.pth")
         return log_path, checkpoint_path
 
     def train_mlm(
@@ -396,6 +396,8 @@ class TransformerTrainer:
         model.train()
 
         log_path, checkpoint_path = self.make_run_log_path(experiment_name=experiment_name)
+        os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
+
         fieldnames = ["step", "loss", "val_loss", "grad_norm", "logits_max", "n_masked", "masked_ratio"]
 
         with open(log_path, "w", newline="") as f:
@@ -416,12 +418,23 @@ class TransformerTrainer:
         total_loss = 0.0
         total_loss_count = 0
 
+        epoch_count = 0
+
         for step in tqdm(range(steps)):
             try:
                 batch = next(data_iter)
             except StopIteration:
+                state_dict = (
+                    model.module.state_dict()
+                    if isinstance(model, torch.nn.DataParallel)
+                    else model.state_dict()
+                )
+                torch.save(state_dict, checkpoint_path + "." + str(epoch_count))
+                epoch_count += 1
+
                 data_iter = iter(loader)
                 batch = next(data_iter)
+                print(f"Finished epoch {epoch_count}, saving checkpoint")
 
             mlm_batch = self.make_mlm_batch(
                 batch,
@@ -511,8 +524,6 @@ class TransformerTrainer:
                             "masked_ratio": float(masked_ratio),
                         }
                     )
-
-        os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
 
         # Save correctly when DataParallel is used
         state_dict = (
