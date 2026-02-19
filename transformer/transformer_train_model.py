@@ -621,7 +621,7 @@ def main() -> None:
         seed=args.seed,
         mask_demo=args.mask_demo,
         mask_mode=args.mask_mode,
-        log_every=1000,
+        log_every=int(1000 * 16.0 / args.batch_size),
         experiment_name=args.experiment_name,
         lr_decay=args.lr_decay,
         device=device,
