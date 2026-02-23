@@ -1,3 +1,5 @@
+# evaluation/clinical_eval_utils.py -----> use for event type 
+# Build token_id → block_id from Vocabulary.START_* boundaries (range-based, no token strings).
 from __future__ import annotations
 
 import json
@@ -10,20 +12,27 @@ from torch.utils.data import Dataset
 IGNORE_INDEX = -100
 
 
-def load_jsonl(path: str):
-    data = []
+
+# IO
+
+def load_jsonl(path: str) -> List[Dict[str, Any]]:
+    data: List[Dict[str, Any]] = []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
             if line.startswith("#"):
+                # allow comment lines like "# ..." or "#£{...}"
                 line = line.lstrip("#").lstrip("£").strip()
                 if not line:
                     continue
             data.append(json.loads(line))
     return data
 
+
+
+# Dataset
 
 @dataclass
 class TopKResult:
@@ -38,11 +47,12 @@ class TopKResult:
 
 class ClinicalSequenceDataset(Dataset):
     """
-    Expected JSONL record keys:
+    Expected JSONL record keys (at least token_ids/ids):
         token_ids: List[int]
-        event_type_ids: Optional[List[int]]  (model segment/event-type embedding ids)
-        labels: Optional[List[int]]          (for MLM)
-        attention_mask: Optional[List[int]]  (1=keep,0=pad)
+        ids: List[int]              (alternative format)
+        event_type_ids: Optional[List[int]]   (segment/event-type embedding ids)
+        labels: Optional[List[int]]           (for MLM)
+        attention_mask: Optional[List[int]]   (1=keep,0=pad)
     """
 
     def __init__(self, records: List[Dict[str, Any]], max_len: int, pad_id: int, default_event_type_id: int = 0):
@@ -56,25 +66,25 @@ class ClinicalSequenceDataset(Dataset):
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         r = self.records[idx]
+
         token_ids = r.get("token_ids", None)
         if token_ids is None:
-            token_ids = r.get("ids", None)          # <-- the test_ids.jsonl Format
+            token_ids = r.get("ids", None)
         if token_ids is None:
-            token_ids = r.get("input_ids", None)    # optional fallback
+            token_ids = r.get("input_ids", None)
         if token_ids is None:
-            token_ids = r.get("tokens", None)       # optional fallback
+            token_ids = r.get("tokens", None)
 
         if token_ids is None:
             raise KeyError(
                 f"Record missing token sequence. Expected one of token_ids/ids/input_ids/tokens. Keys={list(r.keys())}"
             )
 
-        token_ids = list(token_ids)
+        token_ids = list(token_ids)[: self.max_len]
 
         event_type_ids = r.get("event_type_ids", None)
         labels = r.get("labels", None)
 
-        token_ids = token_ids[: self.max_len]
         if event_type_ids is not None:
             event_type_ids = list(event_type_ids)[: self.max_len]
             if len(event_type_ids) < len(token_ids):
@@ -112,8 +122,16 @@ class ClinicalSequenceDataset(Dataset):
         }
 
 
+
+# Token-level metrics (kept for debugging)
+
 @torch.no_grad()
-def topk_accuracy_from_logits(logits: torch.Tensor, labels: torch.Tensor, k: int, ignore_index: int = IGNORE_INDEX) -> TopKResult:
+def topk_accuracy_from_logits(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+    k: int,
+    ignore_index: int = IGNORE_INDEX,
+) -> TopKResult:
     B, L, V = logits.shape
     lbl = labels.view(-1)
     log = logits.view(-1, V)
@@ -150,26 +168,58 @@ def mrr_from_logits(logits: torch.Tensor, labels: torch.Tensor, ignore_index: in
     return float(rr)
 
 
-# ---------------------------------------------------------
-# Event-group evaluation based on Vocabulary block structure
-# ---------------------------------------------------------
+# TYPE/BLOCK mapping based on vocabulary.py START_* (NO changes to vocabulary.py)
+
+
+def _vocab_boundaries_from_vocab(vocab) -> List[Tuple[int, str]]:
+    """
+    Return sorted (start_id, block_name) boundaries using START_* values from Vocabulary.
+    """
+    # These must exist in your Vocabulary class (they do in your paste).
+    boundaries = [
+        (int(getattr(vocab, "START_SPECIAL")), "special"),
+        (int(getattr(vocab, "START_TIME")), "time"),
+        (int(getattr(vocab, "START_DEM_GEN")), "demographic_gender"),
+        (int(getattr(vocab, "START_DEM_AGE")), "demographic_age"),
+        (int(getattr(vocab, "START_DEM_RACE")), "demographic_race"),
+        (int(getattr(vocab, "START_ADM")), "admission"),
+        (int(getattr(vocab, "START_DIAG")), "diagnosis"),
+        (int(getattr(vocab, "START_LABEV")), "labevents"),
+        (int(getattr(vocab, "START_MED")), "medication"),
+        (int(getattr(vocab, "START_OMR_BMI")), "omr_bmi"),
+        (int(getattr(vocab, "START_OMR_WEIGHT")), "omr_weight"),
+        (int(getattr(vocab, "START_OMR_BLOOD_PRES")), "omr_blood_pres"),
+        (int(getattr(vocab, "START_DISCH")), "discharge"),
+        (int(getattr(vocab, "START_DEATH")), "death"),
+    ]
+    boundaries.sort(key=lambda x: x[0])
+    return boundaries
+
 
 def build_token_id_to_group_from_vocab(vocab) -> Dict[int, int]:
     """
-    token_id -> group_id mapping based on Vocabulary block membership.
-    Group IDs are fixed small ints for evaluation.
+    token_id -> group_id mapping based on available Vocabulary blocks.
+
+    Robust to schema differences: uses getattr(..., {}) so missing blocks
+    (e.g., readmission_vocab) won't crash evaluation.
     """
     name_to_gid = {
         "special": 0,
         "time": 1,
         "demographic_gender": 2,
         "demographic_age": 3,
-        "admission": 4,
-        "diagnosis": 5,
-        "labevents": 6,
-        "medication": 7,
-        "readmission": 8,
-        "death": 9,
+        "demographic_race": 4,
+        "admission": 5,
+        "diagnosis": 6,
+        "labevents": 7,
+        "medication": 8,
+        "omr_bmi": 9,
+        "omr_weight": 10,
+        "omr_blood_pres": 11,
+        "discharge": 12,
+        "death": 13,
+        # optional legacy name:
+        "readmission": 14,
     }
 
     token_id_to_group: Dict[int, int] = {}
@@ -179,28 +229,46 @@ def build_token_id_to_group_from_vocab(vocab) -> Dict[int, int]:
         for tid in token_to_id.values():
             token_id_to_group[int(tid)] = int(gid)
 
-    add_block("special", vocab.special_vocab)
-    add_block("time", vocab.time_vocab)
-    add_block("demographic_gender", vocab.dem_gen_vocab)
-    add_block("demographic_age", vocab.dem_age_vocab)
-    add_block("admission", vocab.admission_vocab)
-    add_block("diagnosis", vocab.diagnosis_vocab)
-    add_block("labevents", vocab.labevents_vocab)
-    add_block("medication", vocab.medication_vocab)
+    # --- blocks that exist in your Vocabulary ---
+    add_block("special", getattr(vocab, "special_vocab", {}))
+    add_block("time", getattr(vocab, "time_vocab", {}))
+    add_block("demographic_gender", getattr(vocab, "dem_gen_vocab", {}))
+    add_block("demographic_age", getattr(vocab, "dem_age_vocab", {}))
+    add_block("demographic_race", getattr(vocab, "dem_race_vocab", {}))
+
+    add_block("admission", getattr(vocab, "admission_vocab", {}))
+    add_block("diagnosis", getattr(vocab, "diagnosis_vocab", {}))
+    add_block("labevents", getattr(vocab, "labevents_vocab", {}))
+    add_block("medication", getattr(vocab, "medication_vocab", {}))
+
+    add_block("omr_bmi", getattr(vocab, "omr_bmi_vocab", {}))
+    add_block("omr_weight", getattr(vocab, "omr_weight_vocab", {}))
+    add_block("omr_blood_pres", getattr(vocab, "omr_blood_pres_vocab", {}))
+
+    add_block("discharge", getattr(vocab, "discharge_vocab", {}))
+    add_block("death", getattr(vocab, "death_vocab", {}))
+
+    # --- optional legacy block (won't crash if missing) ---
     add_block("readmission", getattr(vocab, "readmission_vocab", {}))
-    add_block("death", vocab.death_vocab)
 
     return token_id_to_group
 
 
+# TYPE/BLOCK metrics from logits (THIS is what we want)
+
+
 @torch.no_grad()
-def event_type_top1_acc_from_logits(
+def block_top1_acc_from_logits(
     logits: torch.Tensor,
     labels: torch.Tensor,
-    token_id_to_group: Dict[int, int],
+    token_id_to_block: Dict[int, int],
     ignore_index: int = IGNORE_INDEX,
-    default_gid: int = 0,
+    default_block_id: int = 0,
 ) -> float:
+    """
+    Accuracy where prediction is correct if:
+      block(pred_token) == block(true_token)
+    """
     pred = torch.argmax(logits, dim=-1)  # (B,L)
 
     mask = labels != ignore_index
@@ -212,22 +280,25 @@ def event_type_top1_acc_from_logits(
 
     ok = 0
     for p, y in zip(pred_ids, true_ids):
-        gp = token_id_to_group.get(int(p), default_gid)
-        gy = token_id_to_group.get(int(y), default_gid)
-        ok += int(gp == gy)
+        bp = token_id_to_block.get(int(p), default_block_id)
+        by = token_id_to_block.get(int(y), default_block_id)
+        ok += int(bp == by)
 
-    return ok / len(true_ids)
+    return ok / max(1, len(true_ids))
 
 
 @torch.no_grad()
-def event_type_topk_acc_from_logits(
+def block_topk_acc_from_logits(
     logits: torch.Tensor,
     labels: torch.Tensor,
-    token_id_to_group: Dict[int, int],
+    token_id_to_block: Dict[int, int],
     k: int,
     ignore_index: int = IGNORE_INDEX,
-    default_gid: int = 0,
+    default_block_id: int = 0,
 ) -> float:
+    """
+    Top-k accuracy where hit if ANY predicted token in top-k has same block as true token.
+    """
     topk = torch.topk(logits, k=k, dim=-1).indices  # (B,L,k)
 
     mask = labels != ignore_index
@@ -239,8 +310,8 @@ def event_type_topk_acc_from_logits(
 
     ok = 0
     for preds, y in zip(topk_list, true_ids):
-        gy = token_id_to_group.get(int(y), default_gid)
-        hit = any(token_id_to_group.get(int(p), default_gid) == gy for p in preds)
+        by = token_id_to_block.get(int(y), default_block_id)
+        hit = any(token_id_to_block.get(int(p), default_block_id) == by for p in preds)
         ok += int(hit)
 
-    return ok / len(true_ids)
+    return ok / max(1, len(true_ids))
