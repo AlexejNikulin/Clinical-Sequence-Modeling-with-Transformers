@@ -9,7 +9,7 @@ for logfile in os.listdir("logs"):
         continue
 
     df = pd.read_csv('logs/' + logfile)
-    df = df[df['step'] <= 300000]
+    # df = df[df['step'] <= 300000]
     df['loss_running_avg'] = df['loss'].rolling(window=WINDOW_SIZE, min_periods=1).mean()
     df['val_loss_running_avg'] = df['val_loss'].rolling(window=WINDOW_SIZE, min_periods=1).mean()
 
@@ -21,5 +21,5 @@ for logfile in os.listdir("logs"):
     plt.title('Loss per Step')
     plt.grid(True)
     plt.legend()
-    plt.ylim(1, 5)
+    plt.ylim(0, 5)
     plt.savefig('logs/' + logfile.replace("csv", "png"))
