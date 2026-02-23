@@ -91,6 +91,20 @@ FILES = {
         "d_model": 768,
         "n_heads": 12,
         "norm_first": True,
+    },
+    "mlm_big_2.pt": {
+        "ckpt": "train_log_20260219_171035_big-2.pth",
+        "n_layers": 10,
+        "d_model": 768,
+        "n_heads": 12,
+        "norm_first": True,
+    },
+    "mlm_big_3.pt": {
+        "ckpt": "train_log_20260219_171127_big-3.pth",
+        "n_layers": 10,
+        "d_model": 768,
+        "n_heads": 12,
+        "norm_first": True,
     }
 }
 

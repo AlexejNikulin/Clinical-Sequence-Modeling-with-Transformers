@@ -82,8 +82,8 @@ from evaluation.clinical_eval_utils import (
     mrr_from_logits,
     topk_accuracy_from_logits,
     build_token_id_to_group_from_vocab,
-    event_type_top1_acc_from_logits,
-    event_type_topk_acc_from_logits,
+    block_top1_acc_from_logits,
+    block_topk_acc_from_logits,
 )
 
 from compact_transformer_encoder import CompactTransformerConfig, CompactTransformerEncoder
@@ -202,7 +202,7 @@ def evaluate(
         mrr_vals.append(mrr_from_logits(logits, labels))
 
         if token_id_to_group is not None:
-            et_top1_vals.append(event_type_top1_acc_from_logits(logits, labels, token_id_to_group))
+            et_top1_vals.append(block_top1_acc_from_logits(logits, labels, token_id_to_group))
             for k in topks:
                 et_topk_vals[k].append(event_type_topk_acc_from_logits(logits, labels, token_id_to_group, k=k))
 
