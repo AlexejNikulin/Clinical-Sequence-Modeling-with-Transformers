@@ -176,44 +176,43 @@ class SequenceDataset2(Dataset):
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         demographics, events = self.sequences[idx]
 
+        min_budget = int(self.max_len * 0.5)
+        max_budget = int(self.max_len * 1.1)
+        dynamic_len = min(self.max_len, torch.randint(min_budget, max_budget + 1, (1,)).item())
+
         seq: List[int] = []
         seg: List[int] = []
 
-        # Put demographic tokens first
+        # Add demographic data
         seq.extend(demographics)
         seg.extend([0] * len(demographics))
 
         if self.sep_id is not None:
             seq.append(self.sep_id)
             seg.append(0)
+
+        event_token_num = dynamic_len - len(seq)
         
-        # Fill the rest up with events
-        event_token_num = self.max_len - len(seq)
-        event_end_idx = len(events) - event_token_num
-        if event_end_idx <= 0:
-            # Everything fits into the context window
+        if len(events) <= event_token_num:
             seq.extend(events)
             seg.extend([1] * len(events))
-            attn = [0 if tok == self.pad_id else 1 for tok in seq]
-
-            # Padding
-            while len(seq) < self.max_len:
-                seq.append(self.pad_id)
-                seg.append(0)
-                attn.append(0)
         else:
-            # Randomly select a start index in the events list
-            start_idx = torch.randint(0, event_end_idx + 1, size=(1,)).item()
-            end_idx = start_idx + event_token_num
-
-            # Add these events to the sequence
-            seq.extend(events[start_idx:end_idx])
+            max_start = len(events) - event_token_num
+            start_idx = torch.randint(0, max_start + 1, (1,)).item()
+            
+            seq.extend(events[start_idx : start_idx + event_token_num])
             seg.extend([1] * event_token_num)
-            attn = [0 if tok == self.pad_id else 1 for tok in seq]
 
-        assert(len(seq) == len(seg))
-        assert(len(seq) == len(attn))
-        assert(len(seq) == self.max_len)
+        attn = [1] * len(seq)
+
+        padding_len = self.max_len - len(seq)
+        seq.extend([self.pad_id] * padding_len)
+        seg.extend([0] * padding_len)
+        attn.extend([0] * padding_len)
+
+        assert len(seq) == self.max_len
+        assert len(seg) == self.max_len
+        assert len(attn) == self.max_len
 
         out = {
             "input_ids": torch.tensor(seq, dtype=torch.long),
@@ -221,6 +220,7 @@ class SequenceDataset2(Dataset):
         }
         if self.use_event_type_embeddings:
             out["event_type_ids"] = torch.tensor(seg, dtype=torch.long)
+            
         return out
 
 def make_dataloader2(
