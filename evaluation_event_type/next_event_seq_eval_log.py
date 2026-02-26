@@ -35,7 +35,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--default_event_type_id", type=int, default=1)
 
     p.add_argument("--topk", type=str, default="1,5,10")
-    p.add_argument("--seed", type=int, default=13, help="Random seed for reproducible sampling (python + torch).")
+
+    p.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Optional RNG seed for reproducible sampling (python + torch). If omitted, evaluation is fully random.",
+    )
 
     # Predict horizon
     p.add_argument("--horizon", type=int, default=10, help="How many next tokens to predict after the sampled context.")
@@ -198,7 +204,6 @@ def _build_eval_example_nextn(
         torch.tensor(ev_ids, dtype=torch.long),
         [int(x) for x in true_next_tokens],
     )
-# ---------------------------------------------------------------------------
 
 
 # Sliding window that preserves demographics at 0..2
@@ -241,7 +246,6 @@ def _slide_left_preserve_demo(
     eg2[3:] = es
 
     return xg2, ag2, eg2
-# ---------------------------------------------------------------------------
 
 
 @torch.no_grad()
@@ -423,10 +427,12 @@ def evaluate_next_event_nextn_vocab(
 def main() -> None:
     args = parse_args()
 
-    random.seed(int(args.seed))
-    torch.manual_seed(int(args.seed))
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(int(args.seed))
+    # Only seed when explicitly provided
+    if args.seed is not None:
+        random.seed(int(args.seed))
+        torch.manual_seed(int(args.seed))
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(int(args.seed))
 
     model = _load_ckpt_and_model(args.ckpt)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

@@ -31,7 +31,13 @@ def parse_args() -> argparse.Namespace:
 
     p.add_argument("--topk", type=str, default="1,5,10")
     p.add_argument("--horizon", type=int, default=10, help="How many next tokens to predict after the sampled context.")
-    p.add_argument("--seed", type=int, default=13, help="Random seed for reproducible sampling (python + torch).")
+
+    p.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Optional RNG seed for reproducible sampling. If omitted, evaluation is fully random.",
+    )
 
     # speed control via subset sampling
     p.add_argument(
@@ -99,13 +105,6 @@ def _build_eval_example_nextn(
     default_event_type_id: int,
     horizon: int,
 ) -> Optional[Tuple[torch.Tensor, torch.Tensor, torch.Tensor, List[int]]]:
-    """
-    Build one evaluation example:
-    - input length = max_len
-    - we leave at least one padding slot to append into (for the first MASK)
-    - first 3 tokens are always demographics at positions 0..2
-    - returns true_next_tokens: the next `horizon` tokens right after the sampled context in the original sequence
-    """
     L = int(max_len)
     H = int(horizon)
     if H < 1:
@@ -118,13 +117,11 @@ def _build_eval_example_nextn(
     demo = tokens[:3]
     rest = tokens[3:]
 
-    # leave one free slot
     ctx_cap = L - 1
     rest_ctx_cap = ctx_cap - 3
     if rest_ctx_cap < 1:
         raise ValueError("max_len too small after accounting for demographics and free append slot.")
 
-    # need: context + H targets
     if len(rest) >= rest_ctx_cap + H:
         max_start = len(rest) - (rest_ctx_cap + H)
         start = random.randint(0, max_start)
@@ -188,10 +185,6 @@ def _slide_left_preserve_demo(
     *,
     pad_id: int,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """
-    Shift positions [3:] left by 1, keep [0..2] fixed.
-    Frees the last position as a pad slot.
-    """
     if xg.numel() < 4:
         return xg, ag, eg
 
@@ -236,11 +229,9 @@ def evaluate_next_event_nextn_token(
 
     H = int(horizon)
 
-    # Pairwise (global over steps)
     total_steps = 0
     correct_at_k_pairwise = {k: 0 for k in topk}
 
-    # Count/Bag-of-Tokens (average over patients)
     patients_evaluated = 0
     sum_count_score_at_k = {k: 0.0 for k in topk}
 
@@ -262,7 +253,6 @@ def evaluate_next_event_nextn_token(
         if len(true_next_tokens) != H:
             continue
 
-        # print demographics once per patient
         demo = toks[:3]
         print(f"\n=== patient={pi} demographics tokens={demo} ===")
 
@@ -270,15 +260,11 @@ def evaluate_next_event_nextn_token(
         ag = a0.to(device)
         eg = e0.to(device)
 
-        # True counts (bag)
         true_count: Dict[int, int] = {}
         for t in true_next_tokens:
             true_count[int(t)] = true_count.get(int(t), 0) + 1
 
-        # pred_available_count@k: token appears somewhere in top-k for that step
         pred_available_count_at_k: Dict[int, Dict[int, int]] = {k: {} for k in topk}
-
-        # per-patient pairwise correct for logging
         correct_at_k_patient_pairwise = {k: 0 for k in topk}
 
         for step in range(H):
@@ -291,7 +277,6 @@ def evaluate_next_event_nextn_token(
 
             gen_pos = int(pad_pos[0].item())
 
-            # put MASK at gen_pos and include in attention
             xg[gen_pos] = int(mask_id)
             ag[gen_pos] = 1
 
@@ -308,10 +293,9 @@ def evaluate_next_event_nextn_token(
                 labels=None,
                 return_hidden=False,
             )
-            logits = out["logits"][0]  # [L, V]
+            logits = out["logits"][0]
             logit_pos = logits[gen_pos].clone()
 
-            # avoid predicting PAD/MASK
             logit_pos[int(pad_id)] = -1e9
             logit_pos[int(mask_id)] = -1e9
 
@@ -320,24 +304,19 @@ def evaluate_next_event_nextn_token(
             pred_top1_tok = int(topk_tok_ids[0])
 
             true_tok = int(true_next_tokens[step])
-
             print(f"[step={step}] pred_tok={pred_top1_tok} true_tok={true_tok}")
 
-            # Pairwise acc@k (token-level)
             for k in topk:
                 if true_tok in topk_tok_ids[:k]:
                     correct_at_k_pairwise[k] += 1
                     correct_at_k_patient_pairwise[k] += 1
 
-                # Count score bookkeeping: tokens present in top-k this step
                 present_toks = set(int(x) for x in topk_tok_ids[:k])
                 d = pred_available_count_at_k[k]
                 for t in present_toks:
                     d[t] = d.get(t, 0) + 1
 
             total_steps += 1
-
-            # commit predicted token (top-1) into context
             xg[gen_pos] = pred_top1_tok
 
         patients_evaluated += 1
@@ -364,11 +343,9 @@ def evaluate_next_event_nextn_token(
         "horizon": float(H),
     }
 
-    # Global pairwise accuracies over all steps (weighted by steps)
     for k in topk:
         metrics[f"pairwise_acc@{k}_global_token"] = float(correct_at_k_pairwise[k]) / max(1.0, float(total_steps))
 
-    # Mean count_score over patients (unweighted)
     for k in topk:
         metrics[f"count_score@{k}_mean_patient_token"] = float(sum_count_score_at_k[k]) / max(1.0, float(patients_evaluated))
 
@@ -378,10 +355,12 @@ def evaluate_next_event_nextn_token(
 def main() -> None:
     args = parse_args()
 
-    random.seed(int(args.seed))
-    torch.manual_seed(int(args.seed))
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(int(args.seed))
+    # Only seed when explicitly provided 
+    if args.seed is not None:
+        random.seed(int(args.seed))
+        torch.manual_seed(int(args.seed))
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(int(args.seed))
 
     model = _load_ckpt_and_model(args.ckpt)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

@@ -36,7 +36,13 @@ def parse_args() -> argparse.Namespace:
 
     p.add_argument("--topk", type=str, default="1,5,10")
     p.add_argument("--n_trials", type=int, default=10, help="How many random context samples per patient sequence.")
-    p.add_argument("--seed", type=int, default=13, help="Random seed for reproducible sampling (python + torch).")
+
+    p.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Optional RNG seed for reproducible sampling (python + torch). If omitted, evaluation is fully random.",
+    )
 
     p.add_argument(
         "--subset_frac",
@@ -149,7 +155,6 @@ def _build_eval_example(
             ev_demo = None
             ctx_ev_rest = None
             true_next_ev = None
-    # -------------------------------------------------------------------------
 
     input_ids = [pad_id] * L
     attn = [0] * L
@@ -300,10 +305,12 @@ def evaluate_next_event_measure_vocab(
 def main() -> None:
     args = parse_args()
 
-    random.seed(int(args.seed))
-    torch.manual_seed(int(args.seed))
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(int(args.seed))
+    # Only seed when explicitly provided
+    if args.seed is not None:
+        random.seed(int(args.seed))
+        torch.manual_seed(int(args.seed))
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(int(args.seed))
 
     model = _load_ckpt_and_model(args.ckpt)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
