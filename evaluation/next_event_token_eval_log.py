@@ -35,6 +35,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--mask_id", type=int, default=1)
     p.add_argument("--default_event_type_id", type=int, default=1)
 
+    # Toggle whether we "leak" the true target event-type into the MASK position
+    p.add_argument(
+        "--use_target_event_type_at_mask",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "If True and event_type_ids exist, set event_type_ids at the MASK position to the TRUE next token's event type "
+            "(a strong hint). If False, do NOT leak the target event type; instead, use the last attended event type "
+            "or default_event_type_id."
+        ),
+    )
+
     p.add_argument("--topk", type=str, default="1,5,10")
     p.add_argument("--n_trials", type=int, default=10, help="How many random context samples per patient sequence.")
 
@@ -114,6 +126,7 @@ def _build_eval_example(
     pad_id: int,
     mask_id: int,
     default_event_type_id: int,
+    use_target_event_type_at_mask: bool,  
 ) -> Optional[Tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]]:
     """
     Build one evaluation example:
@@ -195,7 +208,12 @@ def _build_eval_example(
     input_ids[L - 1] = mask_id
     attn[L - 1] = 1
 
-    if event_types is not None and true_next_ev is not None:
+    # Toggle whether to leak the TRUE next event-type at the MASK position
+    if (
+        event_types is not None
+        and true_next_ev is not None
+        and bool(use_target_event_type_at_mask)
+    ):
         ev_ids[L - 1] = true_next_ev
     else:
         last_attended = [i for i, a in enumerate(attn[: ctx_len]) if a == 1]
@@ -221,6 +239,7 @@ def evaluate_next_event_measure(
     max_len: int,
     topk: List[int],
     n_trials: int,
+    use_target_event_type_at_mask: bool, 
     token_id_to_group: Optional[Dict[int, int]] = None,
 ) -> Dict[str, float]:
     model.eval()
@@ -256,6 +275,7 @@ def evaluate_next_event_measure(
                 pad_id=int(pad_id),
                 mask_id=int(mask_id),
                 default_event_type_id=int(default_event_type_id),
+                use_target_event_type_at_mask=bool(use_target_event_type_at_mask),  
             )
             if ex is None:
                 continue
@@ -366,10 +386,12 @@ def main() -> None:
         default_event_type_id=int(args.default_event_type_id),
         topk=topk,
         n_trials=int(args.n_trials),
+        use_target_event_type_at_mask=bool(args.use_target_event_type_at_mask),  
         token_id_to_group=token_id_to_group,
     )
 
     print(f"\ndevice={device}")
+    print(f"use_target_event_type_at_mask={bool(args.use_target_event_type_at_mask)}")
     for k, v in metrics.items():
         print(f"{k}={v:.6f}" if isinstance(v, float) else f"{k}={v}")
 
