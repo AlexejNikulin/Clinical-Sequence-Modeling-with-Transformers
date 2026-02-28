@@ -237,7 +237,7 @@ def evaluate_next_event_measure_vocab(
 ) -> Dict[str, float]:
     model.eval()
 
-    # Oopen CSV once and stream rows
+    # Open CSV once and stream rows
     os.makedirs(os.path.dirname(pairs_csv_path) or ".", exist_ok=True)
     f_csv = open(pairs_csv_path, "w", newline="", encoding="utf-8")
     writer = csv.writer(f_csv)
