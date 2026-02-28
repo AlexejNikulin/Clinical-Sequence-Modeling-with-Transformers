@@ -4,6 +4,7 @@ import argparse
 import os
 import sys
 import random
+import csv
 from typing import Any, Dict, List, Optional, Tuple
 
 from tqdm import tqdm
@@ -34,9 +35,27 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--mask_id", type=int, default=1)
     p.add_argument("--default_event_type_id", type=int, default=1)
 
+    # Toggle whether we "leak" the true target event-type into the MASK position
+    p.add_argument(
+        "--use_target_event_type_at_mask",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "If True and event_type_ids exist, set event_type_ids at the MASK position to the TRUE next token's event type "
+            "(a strong hint). If False, do NOT leak the target event type; instead, use the last attended event type "
+            "or default_event_type_id."
+        ),
+    )
+
     p.add_argument("--topk", type=str, default="1,5,10")
     p.add_argument("--n_trials", type=int, default=10, help="How many random context samples per patient sequence.")
-    p.add_argument("--seed", type=int, default=13, help="Random seed for reproducible sampling (python + torch).")
+
+    p.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Optional RNG seed for reproducible sampling (python + torch). If omitted, evaluation is fully random.",
+    )
 
     p.add_argument(
         "--subset_frac",
@@ -45,6 +64,14 @@ def parse_args() -> argparse.Namespace:
         help="Evaluate only this fraction of patients (0<frac<=1). Default 0.05 for faster runs.",
     )
     p.add_argument("--max_patients", type=int, default=None, help="Evaluate only first N patients after subsetting (debug).")
+
+    # CSV logging of (pred, true) pairs
+    p.add_argument(
+        "--pairs_csv",
+        type=str,
+        default=None,
+        help="Output CSV path for per-trial (predicted, true) pairs and their vocab/group ids.",
+    )
 
     return p.parse_args()
 
@@ -102,6 +129,7 @@ def _build_eval_example(
     pad_id: int,
     mask_id: int,
     default_event_type_id: int,
+    use_target_event_type_at_mask: bool,
 ) -> Optional[Tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]]:
     L = int(max_len)
     if L < 5:
@@ -149,7 +177,6 @@ def _build_eval_example(
             ev_demo = None
             ctx_ev_rest = None
             true_next_ev = None
-    # -------------------------------------------------------------------------
 
     input_ids = [pad_id] * L
     attn = [0] * L
@@ -173,7 +200,12 @@ def _build_eval_example(
     input_ids[L - 1] = mask_id
     attn[L - 1] = 1
 
-    if event_types is not None and true_next_ev is not None:
+    # Toggle whether to leak the TRUE next event-type at the MASK position
+    if (
+        event_types is not None
+        and true_next_ev is not None
+        and bool(use_target_event_type_at_mask)
+    ):
         ev_ids[L - 1] = true_next_ev
     else:
         last_attended = [i for i, a in enumerate(attn[: ctx_len]) if a == 1]
@@ -199,9 +231,19 @@ def evaluate_next_event_measure_vocab(
     default_event_type_id: int,
     topk: List[int],
     n_trials: int,
+    use_target_event_type_at_mask: bool,
     token_id_to_vocab: Dict[int, int],  # token_id -> vocab/block id
+    pairs_csv_path: str,  
 ) -> Dict[str, float]:
     model.eval()
+
+    # Open CSV once and stream rows
+    os.makedirs(os.path.dirname(pairs_csv_path) or ".", exist_ok=True)
+    f_csv = open(pairs_csv_path, "w", newline="", encoding="utf-8")
+    writer = csv.writer(f_csv)
+    writer.writerow(
+        ["Patient_ID", "Predicted Token", "True Token", "Predicted_Token_Vocab_ID", "True_Token_Vocab_ID"]
+    )
 
     total_trials = 0
     correct_at_k_global = {k: 0 for k in topk}
@@ -209,83 +251,104 @@ def evaluate_next_event_measure_vocab(
     patients_evaluated = 0
     sum_acc_at_k_patient = {k: 0.0 for k in topk}
 
-    for pi, rec in enumerate(tqdm(records, desc="patients")):
-        toks, ev = _extract_sequence(rec)
+    skipped_unknown_true_vocab = 0  # Track skipped trials due to unknown true vocab
 
-        demo = toks[:3]
-        demo_vocabs = [token_id_to_vocab.get(int(d), -1) for d in demo]
-        print(f"\n=== patient={pi} demographics tokens={demo} vocabs={demo_vocabs} ===")
+    try:
+        for pi, rec in enumerate(tqdm(records, desc="patients")):
+            toks, ev = _extract_sequence(rec)
 
-        patient_trials = 0
-        correct_at_k_patient = {k: 0 for k in topk}
+            # Prefer a real patient id if present; fallback to index
+            pid = rec.get("patient_id", rec.get("patient", rec.get("id", None)))
+            pid_str = str(pid) if pid is not None else str(pi)
 
-        for t in range(int(n_trials)):
-            ex = _build_eval_example(
-                toks,
-                ev,
-                max_len=int(max_len),
-                pad_id=int(pad_id),
-                mask_id=int(mask_id),
-                default_event_type_id=int(default_event_type_id),
-            )
-            if ex is None:
-                continue
+            demo = toks[:3]
+            demo_vocabs = [token_id_to_vocab.get(int(d), -1) for d in demo]
+            print(f"\n=== patient={pi} demographics tokens={demo} vocabs={demo_vocabs} ===")
 
-            x, attn, ev_ids, true_next_tok = ex
-            x = x.unsqueeze(0).to(device)
-            attn = attn.unsqueeze(0).to(device)
-            ev_ids = ev_ids.unsqueeze(0).to(device)
+            patient_trials = 0
+            correct_at_k_patient = {k: 0 for k in topk}
 
-            out = model(
-                input_ids=x,
-                attention_mask=attn,
-                event_type_ids=ev_ids,
-                labels=None,
-                return_hidden=False,
-            )
+            for t in range(int(n_trials)):
+                ex = _build_eval_example(
+                    toks,
+                    ev,
+                    max_len=int(max_len),
+                    pad_id=int(pad_id),
+                    mask_id=int(mask_id),
+                    default_event_type_id=int(default_event_type_id),
+                    use_target_event_type_at_mask=bool(use_target_event_type_at_mask),
+                )
+                if ex is None:
+                    continue
 
-            logits = out["logits"][0]  # [L, V]
-            pos = logits.shape[0] - 1  # MASK position
-            logit_pos = logits[pos].clone()
+                x, attn, ev_ids, true_next_tok = ex
 
-            logit_pos[int(pad_id)] = -1e9
-            logit_pos[int(mask_id)] = -1e9
+                # Skip trials where the true token maps to unknown vocab/group (-1)
+                true_vocab = int(token_id_to_vocab.get(int(true_next_tok), -1))
+                if true_vocab == -1:
+                    skipped_unknown_true_vocab += 1
+                    print(f"[trial={t}] SKIP (true_tok={true_next_tok} maps to unknown vocab=-1)")
+                    continue
 
-            kmax = max(topk)
-            topk_tok_ids = torch.topk(logit_pos, k=kmax, dim=-1).indices.detach().cpu().tolist()
-            pred_top1_tok = int(topk_tok_ids[0])
+                x = x.unsqueeze(0).to(device)
+                attn = attn.unsqueeze(0).to(device)
+                ev_ids = ev_ids.unsqueeze(0).to(device)
 
-            true_vocab = int(token_id_to_vocab.get(int(true_next_tok), -1))
-            pred_vocab_top1 = int(token_id_to_vocab.get(int(pred_top1_tok), -1))
+                out = model(
+                    input_ids=x,
+                    attention_mask=attn,
+                    event_type_ids=ev_ids,
+                    labels=None,
+                    return_hidden=False,
+                )
 
-            print(
-                f"[trial={t}] "
-                f"pred_tok={pred_top1_tok} pred_vocab={pred_vocab_top1}  "
-                f"true_tok={true_next_tok} true_vocab={true_vocab}"
-            )
+                logits = out["logits"][0]  # [L, V]
+                pos = logits.shape[0] - 1  # MASK position
+                logit_pos = logits[pos].clone()
 
-            patient_trials += 1
-            total_trials += 1
+                logit_pos[int(pad_id)] = -1e9
+                logit_pos[int(mask_id)] = -1e9
 
-            topk_vocabs = [int(token_id_to_vocab.get(int(tok), -1)) for tok in topk_tok_ids]
-            for k in topk:
-                if true_vocab in topk_vocabs[:k]:
-                    correct_at_k_patient[k] += 1
-                    correct_at_k_global[k] += 1
+                kmax = max(topk)
+                topk_tok_ids = torch.topk(logit_pos, k=kmax, dim=-1).indices.detach().cpu().tolist()
+                pred_top1_tok = int(topk_tok_ids[0])
 
-        if patient_trials > 0:
-            patients_evaluated += 1
-            print(f"--- patient={pi} trials={patient_trials} accuracy (VOCAB-level) ---")
-            for k in topk:
-                acc_k = float(correct_at_k_patient[k]) / float(patient_trials)
-                sum_acc_at_k_patient[k] += acc_k
-                print(f"acc@{k}={acc_k:.6f}")
-        else:
-            print(f"--- patient={pi} had 0 valid trials (skipped) ---")
+                pred_vocab_top1 = int(token_id_to_vocab.get(int(pred_top1_tok), -1))
+
+                # Write one row per (non-skipped) trial
+                writer.writerow([pid_str, pred_top1_tok, int(true_next_tok), pred_vocab_top1, true_vocab])
+
+                # print(
+                #     f"[trial={t}] "
+                #     f"pred_tok={pred_top1_tok} pred_vocab={pred_vocab_top1}  "
+                #     f"true_tok={true_next_tok} true_vocab={true_vocab}"
+                # )
+
+                patient_trials += 1
+                total_trials += 1
+
+                topk_vocabs = [int(token_id_to_vocab.get(int(tok), -1)) for tok in topk_tok_ids]
+                for k in topk:
+                    if true_vocab in topk_vocabs[:k]:
+                        correct_at_k_patient[k] += 1
+                        correct_at_k_global[k] += 1
+
+            if patient_trials > 0:
+                patients_evaluated += 1
+                print(f"--- patient={pi} trials={patient_trials} accuracy (VOCAB-level) ---")
+                for k in topk:
+                    acc_k = float(correct_at_k_patient[k]) / float(patient_trials)
+                    sum_acc_at_k_patient[k] += acc_k
+                    print(f"acc@{k}={acc_k:.6f}")
+            else:
+                print(f"--- patient={pi} had 0 valid trials (skipped) ---")
+    finally:
+        f_csv.close()
 
     metrics: Dict[str, float] = {
         "patients_evaluated": float(patients_evaluated),
         "trials_total": float(total_trials),
+        "trials_skipped_true_vocab_unknown": float(skipped_unknown_true_vocab),
     }
 
     for k in topk:
@@ -300,10 +363,21 @@ def evaluate_next_event_measure_vocab(
 def main() -> None:
     args = parse_args()
 
-    random.seed(int(args.seed))
-    torch.manual_seed(int(args.seed))
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(int(args.seed))
+    if args.pairs_csv is None:
+        ckpt_base = os.path.splitext(os.path.basename(args.ckpt))[0]
+        args.pairs_csv = os.path.join(
+            "..",
+            "out",
+            "evaluation",
+            f"next_event_vocab_pairs_{ckpt_base}.csv",
+        )
+
+    # Only seed when explicitly provided
+    if args.seed is not None:
+        random.seed(int(args.seed))
+        torch.manual_seed(int(args.seed))
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(int(args.seed))
 
     model = _load_ckpt_and_model(args.ckpt)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -337,10 +411,14 @@ def main() -> None:
         default_event_type_id=int(args.default_event_type_id),
         topk=topk,
         n_trials=int(args.n_trials),
+        use_target_event_type_at_mask=bool(args.use_target_event_type_at_mask),
         token_id_to_vocab=token_id_to_vocab,
+        pairs_csv_path=str(args.pairs_csv),  
     )
 
     print(f"\ndevice={device}")
+    print(f"use_target_event_type_at_mask={bool(args.use_target_event_type_at_mask)}")
+    print(f"pairs_csv={str(args.pairs_csv)}")
     for k, v in metrics.items():
         print(f"{k}={v:.6f}" if isinstance(v, float) else f"{k}={v}")
 
