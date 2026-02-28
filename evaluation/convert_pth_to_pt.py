@@ -105,6 +105,21 @@ FILES = {
         "d_model": 768,
         "n_heads": 12,
         "norm_first": True,
+    },
+    "mlm_big_4.pt": {
+        "ckpt": "train_log_20260224_202150_big-4.pth",
+        "n_layers": 10,
+        "d_model": 768,
+        "n_heads": 12,
+        "norm_first": True,
+    },
+    "mlm_big_5.pt": {
+        "ckpt": "train_log_20260224_202158_big-5.pth",
+        "n_layers": 10,
+        "d_model": 768,
+        "n_heads": 12,
+        "norm_first": True,
+        "dropout": 0.05
     }
 }
 
