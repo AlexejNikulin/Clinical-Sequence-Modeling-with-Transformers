@@ -247,7 +247,7 @@ def evaluate_next_event_measure(
     n_trials: int,
     use_target_event_type_at_mask: bool,
     token_id_to_group: Optional[Dict[int, int]] = None,
-    pairs_csv_path: str,  
+    pairs_csv_path: str,
 ) -> Dict[str, float]:
     model.eval()
 
@@ -264,6 +264,8 @@ def evaluate_next_event_measure(
 
     patients_evaluated = 0
     sum_acc_at_k_patient = {k: 0.0 for k in topk}
+
+    skipped_unknown_true_vocab = 0  # Track skips where true maps to -1 (unknown group/vocab)
 
     try:
         for _, rec in enumerate(tqdm(records, desc="patients")):
@@ -296,6 +298,17 @@ def evaluate_next_event_measure(
                     continue
 
                 x, attn, ev_ids, true_next = ex
+
+                # Skip trials where the true token maps to unknown vocab/group (-1)
+                if token_id_to_group is not None:
+                    true_vocab = int(token_id_to_group.get(int(true_next), -1))
+                    if true_vocab == -1:
+                        skipped_unknown_true_vocab += 1
+                        print(f"[trial={t}] SKIP (patient_id={pid_str}) true_tok={true_next} maps to unknown vocab/group=-1")
+                        continue
+                else:
+                    true_vocab = -1  # keep for CSV consistency when no mapping exists
+
                 x = x.unsqueeze(0).to(device)
                 attn = attn.unsqueeze(0).to(device)
                 ev_ids = ev_ids.unsqueeze(0).to(device)
@@ -318,21 +331,14 @@ def evaluate_next_event_measure(
                 topk_ids = torch.topk(logit_pos, k=kmax, dim=-1).indices.detach().cpu().tolist()
                 pred_top1 = int(topk_ids[0])
 
-                # Compute vocab/group ids for CSV (and for printing)
+                # Compute vocab/group ids for CSV
                 if token_id_to_group is not None:
                     pred_vocab = int(token_id_to_group.get(pred_top1, -1))
-                    true_vocab = int(token_id_to_group.get(true_next, -1))
                 else:
                     pred_vocab = -1
-                    true_vocab = -1
 
-                # Write one row per trial
+                # Write one row per (non-skipped) trial
                 writer.writerow([pid_str, pred_top1, int(true_next), pred_vocab, true_vocab])
-
-                #if token_id_to_group is not None:
-                    #print(f"[trial={t}] pred={pred_top1}(grp={pred_vocab}) true={true_next}(grp={true_vocab})")
-                #else:
-                   # print(f"[trial={t}] pred={pred_top1} true={true_next}")
 
                 patient_trials += 1
                 total_trials += 1
@@ -344,19 +350,17 @@ def evaluate_next_event_measure(
 
             if patient_trials > 0:
                 patients_evaluated += 1
-                #print(f"--- patient_id={pid_str} trials={patient_trials} accuracy ---")
                 for k in topk:
                     acc_k = float(correct_at_k_patient[k]) / float(patient_trials)
                     sum_acc_at_k_patient[k] += acc_k
                     print(f"acc@{k}={acc_k:.6f}")
-            #else:
-                #print(f"--- patient_id={pid_str} had 0 valid trials (skipped) ---")
     finally:
         f_csv.close()
 
     metrics: Dict[str, float] = {
         "patients_evaluated": float(patients_evaluated),
         "trials_total": float(total_trials),
+        "trials_skipped_true_vocab_unknown": float(skipped_unknown_true_vocab),  
     }
 
     for k in topk:
@@ -422,7 +426,7 @@ def main() -> None:
         n_trials=int(args.n_trials),
         use_target_event_type_at_mask=bool(args.use_target_event_type_at_mask),
         token_id_to_group=token_id_to_group,
-        pairs_csv_path=str(args.pairs_csv),  # NEW
+        pairs_csv_path=str(args.pairs_csv),
     )
 
     print(f"\ndevice={device}")
