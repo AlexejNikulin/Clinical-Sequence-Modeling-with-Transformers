@@ -474,7 +474,7 @@ def main() -> None:
     # Build dynamic default for CSV if not provided
     if args.pairs_csv is None:
         ckpt_base = os.path.splitext(os.path.basename(args.ckpt))[0]
-        args.pairs_csv = os.path.join("..", "out", "evaluation", f"next_event_seq_vocab_pairs_{ckpt_base}.csv")
+        args.pairs_csv = os.path.join("..", "out", "evaluation", f"next_event_seq_until_end_pairs_{ckpt_base}.csv")
 
     # Only seed when explicitly provided
     if args.seed is not None:
