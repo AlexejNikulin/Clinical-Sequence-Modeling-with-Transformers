@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 # evaluation/mlm_eval.py. -----> for event type
 '''
 This prints: mlm_block_top1_acc and mlm_block_top{k}_acc
@@ -23,9 +25,7 @@ python -m evaluation.mlm_eval \
   --vocab_path data/vocabulary.json
 '''
 
-
-from __future__ import annotations
-
+from tqdm import tqdm
 import argparse
 import os
 import sys
@@ -128,7 +128,7 @@ def evaluate_mlm_block(
     total_eval_positions = 0
     skipped_batches = 0
 
-    for batch in loader:
+    for batch in tqdm(loader):
         input_ids = batch["input_ids"].to(device)
         attn = batch["attention_mask"].to(device)
         ev = batch["event_type_ids"].to(device)
