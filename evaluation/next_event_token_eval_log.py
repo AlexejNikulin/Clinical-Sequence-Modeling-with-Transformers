@@ -4,6 +4,7 @@ import argparse
 import os
 import sys
 import random
+import csv
 from typing import Any, Dict, List, Optional, Tuple
 
 from tqdm import tqdm
@@ -28,7 +29,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--jsonl", type=str, required=True)
     p.add_argument("--ckpt", type=str, required=True)
 
-    p.add_argument("--vocab_path", type=str, default=None, help="Path to vocabulary.json (optional).")
+    p.add_argument("--vocab_path", type=str, required=True, default=None, help="Path to vocabulary.json (optional).")
 
     p.add_argument("--max_len", type=int, default=256, help="Context window length including the final MASK position.")
     p.add_argument("--pad_id", type=int, default=0)
@@ -65,6 +66,14 @@ def parse_args() -> argparse.Namespace:
         help="Evaluate only this fraction of patients (0<frac<=1). Default 0.05 for faster runs.",
     )
     p.add_argument("--max_patients", type=int, default=None, help="Evaluate only first N patients after subsetting (debug).")
+
+    # CSV logging of (pred, true) pairs
+    p.add_argument(
+        "--pairs_csv",
+        type=str,
+        default=None,
+        help="Output CSV path for per-trial (predicted, true) pairs and their vocab/group ids.",
+    )
 
     return p.parse_args()
 
@@ -126,7 +135,7 @@ def _build_eval_example(
     pad_id: int,
     mask_id: int,
     default_event_type_id: int,
-    use_target_event_type_at_mask: bool,  
+    use_target_event_type_at_mask: bool,
 ) -> Optional[Tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]]:
     """
     Build one evaluation example:
@@ -153,7 +162,6 @@ def _build_eval_example(
 
     # Sampling logic
     if len(rest) >= rest_ctx_len + 1:
-        # long enough: sample a full window of length rest_ctx_len, predict the following token
         max_start = len(rest) - (rest_ctx_len + 1)
         start = random.randint(0, max_start)
         ctx_rest = rest[start : start + rest_ctx_len]
@@ -168,8 +176,6 @@ def _build_eval_example(
             ctx_ev_rest = None
             true_next_ev = None
     else:
-        # short sequence: pick a random target index j in rest, use up-to-rest_ctx_len tokens before it as context
-        # (context may be empty). This ensures multiple trials differ.
         if len(rest) < 1:
             return None
         j = random.randint(0, len(rest) - 1)
@@ -239,10 +245,19 @@ def evaluate_next_event_measure(
     max_len: int,
     topk: List[int],
     n_trials: int,
-    use_target_event_type_at_mask: bool, 
+    use_target_event_type_at_mask: bool,
     token_id_to_group: Optional[Dict[int, int]] = None,
+    pairs_csv_path: str,  
 ) -> Dict[str, float]:
     model.eval()
+
+    # Open CSV once and stream rows
+    os.makedirs(os.path.dirname(pairs_csv_path) or ".", exist_ok=True)
+    f_csv = open(pairs_csv_path, "w", newline="", encoding="utf-8")
+    writer = csv.writer(f_csv)
+    writer.writerow(
+        ["Patient_ID", "Predicted Token", "True Token", "Predicted_Token_Vocab_ID", "True_Token_Vocab_ID"]
+    )
 
     total_trials = 0
     correct_at_k_global = {k: 0 for k in topk}
@@ -250,83 +265,94 @@ def evaluate_next_event_measure(
     patients_evaluated = 0
     sum_acc_at_k_patient = {k: 0.0 for k in topk}
 
-    for _, rec in enumerate(tqdm(records, desc="patients")):
-        # Use patient_id from JSONL if present
-        pid = rec.get("patient_id", rec.get("patient", rec.get("id", None)))
-        pid_str = str(pid) if pid is not None else "UNKNOWN"
+    try:
+        for _, rec in enumerate(tqdm(records, desc="patients")):
+            pid = rec.get("patient_id", rec.get("patient", rec.get("id", None)))
+            pid_str = str(pid) if pid is not None else "UNKNOWN"
 
-        toks, ev = _extract_sequence(rec)
+            toks, ev = _extract_sequence(rec)
 
-        demo = toks[:3]
-        if token_id_to_group is not None:
-            demo_groups = [token_id_to_group.get(int(d), -1) for d in demo]
-            print(f"\n=== patient_id={pid_str} demographics tokens={demo} groups={demo_groups} ===")
-        else:
-            print(f"\n=== patient_id={pid_str} demographics tokens={demo} ===")
-
-        patient_trials = 0
-        correct_at_k_patient = {k: 0 for k in topk}
-
-        for t in range(int(n_trials)):
-            ex = _build_eval_example(
-                toks,
-                ev,
-                max_len=int(max_len),
-                pad_id=int(pad_id),
-                mask_id=int(mask_id),
-                default_event_type_id=int(default_event_type_id),
-                use_target_event_type_at_mask=bool(use_target_event_type_at_mask),  
-            )
-            if ex is None:
-                continue
-
-            x, attn, ev_ids, true_next = ex
-            x = x.unsqueeze(0).to(device)
-            attn = attn.unsqueeze(0).to(device)
-            ev_ids = ev_ids.unsqueeze(0).to(device)
-
-            out = model(
-                input_ids=x,
-                attention_mask=attn,
-                event_type_ids=ev_ids,
-                labels=None,
-                return_hidden=False,
-            )
-            logits = out["logits"][0]  # [L, V]
-            pos = logits.shape[0] - 1
-            logit_pos = logits[pos].clone()
-
-            logit_pos[int(pad_id)] = -1e9
-            logit_pos[int(mask_id)] = -1e9
-
-            kmax = max(topk)
-            topk_ids = torch.topk(logit_pos, k=kmax, dim=-1).indices.detach().cpu().tolist()
-            pred_top1 = int(topk_ids[0])
-
+            demo = toks[:3]
             if token_id_to_group is not None:
-                pg = token_id_to_group.get(pred_top1, -1)
-                tg = token_id_to_group.get(true_next, -1)
-                print(f"[trial={t}] pred={pred_top1}(grp={pg}) true={true_next}(grp={tg})")
+                demo_groups = [token_id_to_group.get(int(d), -1) for d in demo]
+                print(f"\n=== patient_id={pid_str} demographics tokens={demo} groups={demo_groups} ===")
             else:
-                print(f"[trial={t}] pred={pred_top1} true={true_next}")
+                print(f"\n=== patient_id={pid_str} demographics tokens={demo} ===")
 
-            patient_trials += 1
-            total_trials += 1
+            patient_trials = 0
+            correct_at_k_patient = {k: 0 for k in topk}
 
-            for k in topk:
-                if int(true_next) in topk_ids[:k]:
-                    correct_at_k_patient[k] += 1
-                    correct_at_k_global[k] += 1
+            for t in range(int(n_trials)):
+                ex = _build_eval_example(
+                    toks,
+                    ev,
+                    max_len=int(max_len),
+                    pad_id=int(pad_id),
+                    mask_id=int(mask_id),
+                    default_event_type_id=int(default_event_type_id),
+                    use_target_event_type_at_mask=bool(use_target_event_type_at_mask),
+                )
+                if ex is None:
+                    continue
 
-        if patient_trials > 0:
-            patients_evaluated += 1
-            print(f"--- patient_id={pid_str} trials={patient_trials} accuracy ---")
-            for k in topk:
-                acc_k = float(correct_at_k_patient[k]) / float(patient_trials)
-                sum_acc_at_k_patient[k] += acc_k
-                print(f"acc@{k}={acc_k:.6f}")
-        else:
-            print(f"--- patient_id={pid_str} had 0 valid trials (skipped) ---")
+                x, attn, ev_ids, true_next = ex
+                x = x.unsqueeze(0).to(device)
+                attn = attn.unsqueeze(0).to(device)
+                ev_ids = ev_ids.unsqueeze(0).to(device)
+
+                out = model(
+                    input_ids=x,
+                    attention_mask=attn,
+                    event_type_ids=ev_ids,
+                    labels=None,
+                    return_hidden=False,
+                )
+                logits = out["logits"][0]  # [L, V]
+                pos = logits.shape[0] - 1
+                logit_pos = logits[pos].clone()
+
+                logit_pos[int(pad_id)] = -1e9
+                logit_pos[int(mask_id)] = -1e9
+
+                kmax = max(topk)
+                topk_ids = torch.topk(logit_pos, k=kmax, dim=-1).indices.detach().cpu().tolist()
+                pred_top1 = int(topk_ids[0])
+
+                # Compute vocab/group ids for CSV (and for printing)
+                if token_id_to_group is not None:
+                    pred_vocab = int(token_id_to_group.get(pred_top1, -1))
+                    true_vocab = int(token_id_to_group.get(true_next, -1))
+                else:
+                    pred_vocab = -1
+                    true_vocab = -1
+
+                # Write one row per trial
+                writer.writerow([pid_str, pred_top1, int(true_next), pred_vocab, true_vocab])
+
+                #if token_id_to_group is not None:
+                    #print(f"[trial={t}] pred={pred_top1}(grp={pred_vocab}) true={true_next}(grp={true_vocab})")
+                #else:
+                   # print(f"[trial={t}] pred={pred_top1} true={true_next}")
+
+                patient_trials += 1
+                total_trials += 1
+
+                for k in topk:
+                    if int(true_next) in topk_ids[:k]:
+                        correct_at_k_patient[k] += 1
+                        correct_at_k_global[k] += 1
+
+            if patient_trials > 0:
+                patients_evaluated += 1
+                #print(f"--- patient_id={pid_str} trials={patient_trials} accuracy ---")
+                for k in topk:
+                    acc_k = float(correct_at_k_patient[k]) / float(patient_trials)
+                    sum_acc_at_k_patient[k] += acc_k
+                    print(f"acc@{k}={acc_k:.6f}")
+            #else:
+                #print(f"--- patient_id={pid_str} had 0 valid trials (skipped) ---")
+    finally:
+        f_csv.close()
 
     metrics: Dict[str, float] = {
         "patients_evaluated": float(patients_evaluated),
@@ -345,7 +371,15 @@ def evaluate_next_event_measure(
 def main() -> None:
     args = parse_args()
 
-    # Only seed when explicitly provided
+    if args.pairs_csv is None:
+        ckpt_base = os.path.splitext(os.path.basename(args.ckpt))[0]
+        args.pairs_csv = os.path.join(
+            "..",
+            "out",
+            "evaluation",
+            f"next_event_pairs_{ckpt_base}.csv",
+        )
+
     if args.seed is not None:
         random.seed(int(args.seed))
         torch.manual_seed(int(args.seed))
@@ -386,12 +420,14 @@ def main() -> None:
         default_event_type_id=int(args.default_event_type_id),
         topk=topk,
         n_trials=int(args.n_trials),
-        use_target_event_type_at_mask=bool(args.use_target_event_type_at_mask),  
+        use_target_event_type_at_mask=bool(args.use_target_event_type_at_mask),
         token_id_to_group=token_id_to_group,
+        pairs_csv_path=str(args.pairs_csv),  # NEW
     )
 
     print(f"\ndevice={device}")
     print(f"use_target_event_type_at_mask={bool(args.use_target_event_type_at_mask)}")
+    print(f"pairs_csv={str(args.pairs_csv)}")
     for k, v in metrics.items():
         print(f"{k}={v:.6f}" if isinstance(v, float) else f"{k}={v}")
 
