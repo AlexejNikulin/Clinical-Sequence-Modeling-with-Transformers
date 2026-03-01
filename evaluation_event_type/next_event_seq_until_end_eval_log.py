@@ -62,7 +62,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--use_target_event_type_at_mask",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=True,
         help=(
             "If True and event_type_ids exist, set event_type_ids at each generated MASK position to the TRUE token's "
             "event type for that step (strong hint). If False, do NOT leak; use last attended event type or default."
@@ -179,7 +179,7 @@ def _build_eval_example_nextn_length_independent(
     ctx_left = max(0, pred_start - rest_ctx_cap)
     ctx_rest = rest[ctx_left:pred_start]
 
-    true_next_tokens = rest[pred_start : min(len(rest), pred_start + H)]
+    true_next_tokens = rest[pred_start: min(len(rest), pred_start + H)]
     if len(true_next_tokens) < 1:
         return None
 
@@ -190,7 +190,7 @@ def _build_eval_example_nextn_length_independent(
         ev_demo = event_types[:3]
         ev_rest = event_types[3:]
         ctx_ev_rest = ev_rest[ctx_left:pred_start]
-        true_next_event_types = ev_rest[pred_start : min(len(ev_rest), pred_start + H)]
+        true_next_event_types = ev_rest[pred_start: min(len(ev_rest), pred_start + H)]
         if len(true_next_event_types) != len(true_next_tokens):
             raise ValueError("Internal mismatch between tokens and event_types targets.")
 
@@ -306,6 +306,12 @@ def evaluate_next_event_nextn_vocab(
 
     skipped_unknown_true_vocab = 0
 
+    # END-OF-SEQUENCE (stop-vocab) accuracy on EVENT/VOCAB level 
+    end_steps_total = 0
+    end_correct_at_k_global = {k: 0 for k in topk}
+    end_patients_evaluated = 0
+    sum_end_acc_at_k_patient = {k: 0.0 for k in topk}
+
     try:
         for pi, rec in enumerate(tqdm(records, desc="patients")):
             toks, ev = _extract_sequence(rec)
@@ -338,6 +344,11 @@ def evaluate_next_event_nextn_vocab(
             correct_at_k_patient_pairwise = {k: 0 for k in topk}
 
             valid_steps_patient = 0
+
+            # Per-patient END-step bookkeeping (only for true_stop completion) 
+            saw_end_step_patient = False
+            end_steps_patient = 0
+            end_correct_at_k_patient = {k: 0 for k in topk}
 
             for step in range(min(Hmax, len(true_next_tokens))):
                 true_tok = int(true_next_tokens[step])
@@ -409,6 +420,16 @@ def evaluate_next_event_nextn_vocab(
                     for v in present_vocabs:
                         d[v] = d.get(v, 0) + 1
 
+                # End-of-sequence evaluation (VOCAB-level) 
+                # Only count if THIS STEP is the true end event (true_vocab in stop_vocabs).
+                if stop_vocabs and true_vocab in stop_vocabs:
+                    saw_end_step_patient = True
+                    end_steps_patient += 1
+                    end_steps_total += 1
+                    for k in topk:
+                        if true_vocab in topk_vocabs[:k]:
+                            end_correct_at_k_patient[k] += 1
+
                 total_steps += 1
                 valid_steps_patient += 1
 
@@ -446,6 +467,32 @@ def evaluate_next_event_nextn_vocab(
                     overlap += min(int(c_true), int(pred_cnt.get(v, 0)))
                 sum_count_overlap_at_k[k] += float(overlap) / float(valid_steps_patient)
 
+            # Only for COMPLETED sequences (true_stop reached) 
+            if saw_end_step_patient and end_steps_patient > 0:
+                end_patients_evaluated += 1
+                for k in topk:
+                    sum_end_acc_at_k_patient[k] += float(end_correct_at_k_patient[k]) / float(end_steps_patient)
+
+                # Print per completed patient
+                print(f"\n===== Patient {pid_str} COMPLETED (true_stop) =====")
+                for k in topk:
+                    pairwise_patient = float(correct_at_k_patient_pairwise[k]) / float(valid_steps_patient)
+                    print(f"pairwise_acc@{k}_patient_vocab = {pairwise_patient:.6f}")
+
+                for k in topk:
+                    pred_cnt = pred_available_count_at_k[k]
+                    overlap = 0
+                    for vv, c_true in true_count.items():
+                        overlap += min(int(c_true), int(pred_cnt.get(vv, 0)))
+                    count_score_patient = float(overlap) / float(valid_steps_patient)
+                    print(f"count_score@{k}_patient_vocab = {count_score_patient:.6f}")
+
+                for k in topk:
+                    end_acc = float(end_correct_at_k_patient[k]) / float(end_steps_patient)
+                    print(f"end_event_acc@{k}_patient_vocab = {end_acc:.6f}")
+
+                print("==============================================\n")
+
     finally:
         f_csv.close()
 
@@ -454,6 +501,8 @@ def evaluate_next_event_nextn_vocab(
         "steps_total": float(total_steps),
         "horizon_max": float(Hmax),
         "steps_skipped_true_vocab_unknown": float(skipped_unknown_true_vocab),
+        "end_patients_evaluated": float(end_patients_evaluated),
+        "end_steps_total": float(end_steps_total),
     }
 
     # global (weighted by steps)
@@ -464,6 +513,11 @@ def evaluate_next_event_nextn_vocab(
     for k in topk:
         metrics[f"pairwise_acc@{k}_mean_patient_vocab"] = float(sum_pairwise_acc_at_k[k]) / max(1.0, float(patients_evaluated))
         metrics[f"count_score@{k}_mean_patient_vocab"] = float(sum_count_overlap_at_k[k]) / max(1.0, float(patients_evaluated))
+
+    # End-event metrics (VOCAB-level), only on completed (true_stop) patients 
+    for k in topk:
+        metrics[f"end_event_acc@{k}_global_vocab"] = float(end_correct_at_k_global[k]) / max(1.0, float(end_steps_total))
+        metrics[f"end_event_acc@{k}_mean_patient_vocab"] = float(sum_end_acc_at_k_patient[k]) / max(1.0, float(end_patients_evaluated))
 
     return metrics
 

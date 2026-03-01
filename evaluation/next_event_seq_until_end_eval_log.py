@@ -37,7 +37,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--topk", type=str, default="1,5,10")
 
     # NOTE: horizon is a MAX cap to avoid infinite loops (we may stop earlier by stop_vocabs or seq end)
-    p.add_argument("--horizon", type=int, default=1000, help="Maximum number of next tokens to predict after the sampled context.")
+    p.add_argument(
+        "--horizon",
+        type=int,
+        default=1000,
+        help="Maximum number of next tokens to predict after the sampled context.",
+    )
 
     p.add_argument(
         "--seed",
@@ -47,7 +52,12 @@ def parse_args() -> argparse.Namespace:
     )
 
     # --- stop-vocab support (vocab/group IDs) ---
-    p.add_argument("--vocab_path", type=str, default=None, help="Path to vocabulary.json (required for vocab mapping / stop_vocabs / skips).")
+    p.add_argument(
+        "--vocab_path",
+        type=str,
+        default=None,
+        help="Path to vocabulary.json (required for vocab mapping / stop_vocabs / skips).",
+    )
     p.add_argument(
         "--stop_vocabs",
         type=str,
@@ -72,7 +82,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max_patients", type=int, default=None)
 
     # CSV logging
-    p.add_argument("--pairs_csv", type=str, default=None, help="Output CSV path for per-step (pred, true) pairs + vocab ids.")
+    p.add_argument(
+        "--pairs_csv",
+        type=str,
+        default=None,
+        help="Output CSV path for per-step (pred, true) pairs + vocab ids.",
+    )
 
     return p.parse_args()
 
@@ -138,28 +153,27 @@ def _build_eval_example_nextn_length_independent(
     horizon: int,
 ) -> Optional[
     Tuple[
-        torch.Tensor,              # input_ids [L]
-        torch.Tensor,              # attention_mask [L]
-        torch.Tensor,              # event_type_ids [L]
-        List[int],                 # true_next_tokens (len=H_eff)
-        Optional[List[int]],       # true_next_event_types (len=H_eff) or None
+        torch.Tensor,  # input_ids [L]
+        torch.Tensor,  # attention_mask [L]
+        torch.Tensor,  # event_type_ids [L]
+        List[int],  # true_next_tokens (len=H_eff)
+        Optional[List[int]],  # true_next_event_types (len=H_eff) or None
     ]
 ]:
     """
-    Length-independent sampling (same principle as in your last scripts):
+    Length-independent sampling:
     - demo = tokens[:3] fixed at positions 0..2
     - rest = tokens[3:]
-    - choose a RANDOM prediction start position pred_start in rest
-    - context = up to rest_ctx_cap tokens immediately BEFORE pred_start
-    - targets = up to horizon tokens starting at pred_start, clipped to end (H_eff may be < horizon)
-    - keep at least one PAD slot free for the first appended MASK (ctx_cap = L-1)
+    - choose random pred_start in rest
+    - context = up to rest_ctx_cap tokens immediately before pred_start
+    - targets = up to horizon tokens starting at pred_start (clipped to end)
+    - keep at least one PAD slot free for first appended MASK (ctx_cap = L-1)
     """
     L = int(max_len)
     H = int(horizon)
     if H < 1:
         raise ValueError("--horizon must be >= 1.")
     if L < 6:
-        # 3 demo + at least 1 context + 1 free slot
         raise ValueError("max_len must be >= 6 for next-N evaluation with demographics and append slot.")
     if len(tokens) < 4:
         return None
@@ -169,8 +183,7 @@ def _build_eval_example_nextn_length_independent(
     if len(rest) < 1:
         return None
 
-    # Leave one free slot for iterative append/mask
-    ctx_cap = L - 1
+    ctx_cap = L - 1  # leave at least one free PAD slot for generation
     rest_ctx_cap = ctx_cap - 3
     if rest_ctx_cap < 1:
         raise ValueError("max_len too small after accounting for demographics and free append slot.")
@@ -180,7 +193,7 @@ def _build_eval_example_nextn_length_independent(
     ctx_rest = rest[ctx_left:pred_start]
 
     true_next_tokens = rest[pred_start : min(len(rest), pred_start + H)]
-    if not true_next_tokens:
+    if len(true_next_tokens) < 1:
         return None
 
     true_next_event_types: Optional[List[int]] = None
@@ -198,7 +211,7 @@ def _build_eval_example_nextn_length_independent(
     attn = [0] * L
     ev_ids = [default_event_type_id] * L
 
-    # demographics
+    # demographics (always)
     for i in range(min(3, len(demo))):
         input_ids[i] = int(demo[i])
         attn[i] = 1
@@ -274,7 +287,7 @@ def evaluate_next_event_nextn_vocab(
     topk: List[int],
     horizon: int,
     stop_vocabs: Set[int],
-    token_id_to_vocab: Dict[int, int],     # required for skips + metrics + stop condition
+    token_id_to_vocab: Dict[int, int],  # required for skips + metrics + stop condition
     pairs_csv_path: str,
     use_target_event_type_at_mask: bool,
 ) -> Dict[str, float]:
@@ -306,6 +319,12 @@ def evaluate_next_event_nextn_vocab(
     sum_pairwise_acc_at_k = {k: 0.0 for k in topk}
 
     skipped_unknown_true_vocab = 0
+
+    # End-token accuracy on STOP vocabs (token-level, only when TRUE hits stop_vocabs)
+    end_steps_total = 0  # number of evaluated end-steps (true_vocab in stop_vocabs, not skipped)
+    end_correct_at_k_global = {k: 0 for k in topk}
+    end_patients_evaluated = 0  # patients/windows that contributed at least 1 end-step (usually 1)
+    sum_end_acc_at_k_patient = {k: 0.0 for k in topk}
 
     try:
         for pi, rec in enumerate(tqdm(records, desc="patients")):
@@ -339,7 +358,11 @@ def evaluate_next_event_nextn_vocab(
             correct_at_k_patient_pairwise = {k: 0 for k in topk}
 
             valid_steps_patient = 0
-            stopped_by = ""
+
+            # Per-patient end-token bookkeeping (only if TRUE hits stop_vocabs)
+            saw_end_step_patient = False
+            end_correct_at_k_patient = {k: 0 for k in topk}  # will be 0/1 in practice
+            end_steps_patient = 0
 
             for step in range(min(Hmax, len(true_next_tokens))):
                 true_tok = int(true_next_tokens[step])
@@ -423,6 +446,18 @@ def evaluate_next_event_nextn_vocab(
                 # CSV row for this VALID step
                 writer.writerow([pid_str, int(step), pred_top1_tok, true_tok, pred_vocab, true_vocab, stopped_by])
 
+                # End-token accuracy, ONLY when TRUE hits stop_vocabs (i.e., true_stop moment) 
+                # This automatically excludes horizon-stopped sequences (no true stop seen).
+                if stop_vocabs and true_vocab in stop_vocabs:
+                    saw_end_step_patient = True
+                    end_steps_patient += 1
+                    end_steps_total += 1
+                    for k in topk:
+                        if true_tok in topk_tok_ids[:k]:
+                            end_correct_at_k_global[k] += 1
+                            end_correct_at_k_patient[k] += 1
+                    # NOTE: we still stop below due to "true_stop" rule (inclusive)
+
                 if stopped_by:
                     break
 
@@ -444,6 +479,35 @@ def evaluate_next_event_nextn_vocab(
                     overlap += min(int(c_true), int(pred_cnt.get(t, 0)))
                 sum_count_score_at_k[k] += float(overlap) / float(valid_steps_patient)
 
+            # Mean-patient end-token acc (only patients/windows with true end reached)
+            if saw_end_step_patient and end_steps_patient > 0:
+                end_patients_evaluated += 1
+                for k in topk:
+                    # usually denom=1, but keep generic
+                    sum_end_acc_at_k_patient[k] += float(end_correct_at_k_patient[k]) / float(end_steps_patient)
+
+            if saw_end_step_patient:
+                print(f"\n===== Patient {pid_str} COMPLETED (true_stop) =====")
+
+                for k in topk:
+                    pairwise_patient = float(correct_at_k_patient_pairwise[k]) / float(valid_steps_patient)
+                    print(f"pairwise_acc@{k}_patient = {pairwise_patient:.6f}")
+
+                for k in topk:
+                    pred_cnt = pred_available_count_at_k[k]
+                    overlap = 0
+                    for t, c_true in true_count.items():
+                        overlap += min(int(c_true), int(pred_cnt.get(t, 0)))
+                    count_score_patient = float(overlap) / float(valid_steps_patient)
+                    print(f"count_score@{k}_patient = {count_score_patient:.6f}")
+
+                if end_steps_patient > 0:
+                    for k in topk:
+                        end_acc = float(end_correct_at_k_patient[k]) / float(end_steps_patient)
+                        print(f"end_token_acc@{k}_patient = {end_acc:.6f}")
+
+                print("==============================================\n")
+
     finally:
         f_csv.close()
 
@@ -452,6 +516,9 @@ def evaluate_next_event_nextn_vocab(
         "steps_total": float(total_steps),
         "horizon_max": float(Hmax),
         "steps_skipped_true_vocab_unknown": float(skipped_unknown_true_vocab),
+        # End-token coverage 
+        "end_patients_evaluated": float(end_patients_evaluated),
+        "end_steps_total": float(end_steps_total),
     }
 
     # global (weighted by steps)
@@ -460,8 +527,19 @@ def evaluate_next_event_nextn_vocab(
 
     # mean over patients (unweighted), only patients with >=1 valid step
     for k in topk:
-        metrics[f"pairwise_acc@{k}_mean_patient_token"] = float(sum_pairwise_acc_at_k[k]) / max(1.0, float(patients_evaluated))
-        metrics[f"count_score@{k}_mean_patient_token"] = float(sum_count_score_at_k[k]) / max(1.0, float(patients_evaluated))
+        metrics[f"pairwise_acc@{k}_mean_patient_token"] = float(sum_pairwise_acc_at_k[k]) / max(
+            1.0, float(patients_evaluated)
+        )
+        metrics[f"count_score@{k}_mean_patient_token"] = float(sum_count_score_at_k[k]) / max(
+            1.0, float(patients_evaluated)
+        )
+
+    # End-token accuracies (TOKEN-level), only where TRUE hits stop_vocabs
+    for k in topk:
+        metrics[f"end_token_acc@{k}_global_token"] = float(end_correct_at_k_global[k]) / max(1.0, float(end_steps_total))
+        metrics[f"end_token_acc@{k}_mean_patient_token"] = float(sum_end_acc_at_k_patient[k]) / max(
+            1.0, float(end_patients_evaluated)
+        )
 
     return metrics
 
@@ -483,14 +561,13 @@ def main() -> None:
 
     stop_vocabs = _parse_int_set_csv(args.stop_vocabs)
 
-    # We need token_id_to_vocab for:
-    # - stop_vocabs
-    # - skip true_vocab==-1
-    # - metrics logging of vocab ids
     if not args.vocab_path:
-        raise ValueError("--vocab_path is required (needed for token->vocab mapping, skips, metrics, and stop_vocabs).")
+        raise ValueError(
+            "--vocab_path is required (needed for token->vocab mapping, skips, metrics, and stop_vocabs)."
+        )
 
     from vocabulary import Vocabulary
+
     vocab = Vocabulary.load(args.vocab_path)
     token_id_to_vocab = build_token_id_to_group_from_vocab(vocab)
 
