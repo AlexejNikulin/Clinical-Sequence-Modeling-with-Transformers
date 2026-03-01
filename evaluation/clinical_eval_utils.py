@@ -171,39 +171,39 @@ def token_topk_acc_from_logits(logits: torch.Tensor, labels: torch.Tensor, k: in
 
 
 @torch.no_grad()
-def block_top1_acc_from_logits(
+def block_topk_acc_from_logits(
     logits: torch.Tensor,
     labels: torch.Tensor,
     token_id_to_block: Dict[int, int],
+    k: int,
 ) -> float:
     """
-    Convenience wrapper for block top-1 accuracy.
-
-    Some evaluation scripts import block_top1_acc_from_logits.
-    Internally we implement the generic block_topk_acc_from_logits,
-    so this wrapper keeps backward compatibility.
+    Block-level top-k accuracy on eval positions only.
+    A position is correct if ANY of the top-k predicted token IDs maps to the same block
+    as the true label token ID.
     """
-    return block_topk_acc_from_logits(logits, labels, token_id_to_block, k=1)
+    if k <= 0:
+        raise ValueError("k must be >= 1")
 
     mask = labels != IGNORE_INDEX
     if mask.sum().item() == 0:
         return 0.0
 
-    logits_flat = logits[mask]  # [N, V]
-    labels_flat = labels[mask]  # [N]
+    logits_flat = logits[mask]   # [N, V]
+    labels_flat = labels[mask]   # [N]
 
-    # True blocks for each eval label
+    # Map true token ids -> blocks
     true_blocks = torch.tensor(
         [token_id_to_block.get(int(tid), -1) for tid in labels_flat.tolist()],
         device=logits.device,
         dtype=torch.long,
     )  # [N]
 
-    # Top-k predicted token ids -> blocks
+    # Top-k predicted token ids
     topk_ids = logits_flat.topk(k, dim=1).indices  # [N, k]
-    pred_blocks = torch.empty_like(topk_ids, dtype=torch.long)
 
-    # Note: loop is fine for eval sizes; vectorization possible but not necessary here.
+    # Map predicted token ids -> blocks
+    pred_blocks = torch.empty_like(topk_ids, dtype=torch.long)
     for i in range(topk_ids.size(0)):
         for j in range(topk_ids.size(1)):
             pred_blocks[i, j] = int(token_id_to_block.get(int(topk_ids[i, j].item()), -1))
