@@ -63,7 +63,6 @@ Requirement:
 - short sequences also sampled (random start in body + padding)
 """
 
-from __future__ import annotations
 
 import argparse
 import json
