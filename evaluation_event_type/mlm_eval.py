@@ -1,12 +1,4 @@
 from __future__ import annotations
-<<<<<<< HEAD
-
-# evaluation/mlm_eval.py. -----> for event type
-'''
-This prints: mlm_block_top1_acc and mlm_block_top{k}_acc
-(no exact token accuracy needed; we can keep it, but we said “NOT EXACT TOKENS”).'''
-=======
->>>>>>> fix/random-window-sampling
 
 """
 evaluation_event_type/mlm_eval.py  -----> for event type (block eval)
@@ -59,9 +51,6 @@ python -m evaluation_event_type.mlm_eval \
 """
 evaluation_event_type/mlm_eval.py
 
-<<<<<<< HEAD
-from tqdm import tqdm
-=======
 MLM evaluation by "Vocabulary blocks" (next-event type), NOT exact tokens.
 
 Adds window sampling:
@@ -76,7 +65,6 @@ Requirement:
 
 from __future__ import annotations
 
->>>>>>> fix/random-window-sampling
 import argparse
 import json
 import os
@@ -184,15 +172,11 @@ def evaluate_mlm_block(
     total_eval_positions = 0
     skipped_batches = 0
 
-<<<<<<< HEAD
-    for batch in tqdm(loader):
-=======
     sum_block_top1 = 0.0
     sum_block_topk = {k: 0.0 for k in topks}
     sum_mrr = 0.0  # token-level diagnostic
 
     for batch in loader:
->>>>>>> fix/random-window-sampling
         input_ids = batch["input_ids"].to(device)
         attn = batch["attention_mask"].to(device)
         ev = batch["event_type_ids"].to(device)
