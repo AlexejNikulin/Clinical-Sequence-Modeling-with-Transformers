@@ -8,3 +8,18 @@ checkpoints_raw/
 data/
 *.pth
 .DS_Store
+
+# local env
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+/tmp/
+*.jsonl
+.venv/
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+tmp_test.jsonl
+debug_sampling_no_torch.py

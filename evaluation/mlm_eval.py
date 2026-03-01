@@ -57,18 +57,15 @@ python -m evaluation.mlm_eval --jsonl data/test_ids.jsonl --ckpt checkpoints/mlm
 from __future__ import annotations
 
 import argparse
-import os
-import sys
 import json
-from tqdm import tqdm
-
-from typing import Any, Dict, List, Optional
+import os
+import random
+import sys
+from typing import Any, Dict, List
 
 import torch
-
 from torch.utils.data import DataLoader
-
-
+from tqdm import tqdm
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 if REPO_ROOT not in sys.path:
@@ -77,29 +74,22 @@ if REPO_ROOT not in sys.path:
 from evaluation.clinical_eval_utils import (
     ClinicalSequenceDataset,
     IGNORE_INDEX,
-    TopKResult,
     load_jsonl,
     mrr_from_logits,
-    topk_accuracy_from_logits,
-    build_token_id_to_group_from_vocab,
+    build_token_id_to_block_id_from_vocab,
     block_top1_acc_from_logits,
     block_topk_acc_from_logits,
 )
 
 from compact_transformer_encoder import CompactTransformerConfig, CompactTransformerEncoder
-
 from mlm_masking import mlm_mask_801010
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description="MLM evaluation (Top-k + MRR). If JSONL has no labels, creates MLM labels on-the-fly."
-    )
+    p = argparse.ArgumentParser(description="MLM evaluation by VOCAB BLOCK (event type), not exact tokens.")
     p.add_argument("--jsonl", type=str, required=True)
     p.add_argument("--ckpt", type=str, required=True)
-
-    # NEW: for event-type/group eval from Vocabulary
-    p.add_argument("--vocab_path", type=str, default=None, help="Path to vocabulary.json (for event-type eval).")
+    p.add_argument("--vocab_path", type=str, required=True, help="Path to vocabulary.json (needed for block mapping).")
 
     p.add_argument("--batch_size", type=int, default=32)
     p.add_argument("--max_len", type=int, default=256)
@@ -108,11 +98,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--default_event_type_id", type=int, default=1)
     p.add_argument("--topk", type=str, default="1,5,10")
 
+    # MLM masking options
     p.add_argument("--p_mlm", type=float, default=0.15)
     p.add_argument("--seed", type=int, default=0)
-
     p.add_argument("--avoid_random_special", action="store_true")
-    p.add_argument("--use_on_the_fly_masking", action="store_true", help="Force on-the-fly masking even if labels exist.")
+    p.add_argument("--use_on_the_fly_masking", action="store_true", help="Mask on-the-fly even if labels exist.")
+
+    # Optional: window sampling for long sequences
+    p.add_argument("--sample_windows", action="store_true", help="Randomly sample a window (keeps prefix fixed).")
+    p.add_argument("--keep_prefix_n", type=int, default=0, help="How many prefix tokens to keep before sampling.")
     return p.parse_args()
 
 
@@ -132,36 +126,44 @@ def _jsonl_has_labels(path: str, max_check: int = 200) -> bool:
     return False
 
 
+def _load_ckpt_and_model(ckpt_path: str) -> CompactTransformerEncoder:
+    ckpt = torch.load(ckpt_path, map_location="cpu")
+    if isinstance(ckpt, dict) and "cfg" in ckpt and "model_state_dict" in ckpt:
+        cfg = CompactTransformerConfig(**ckpt["cfg"])
+        model = CompactTransformerEncoder(cfg)
+        model.load_state_dict(ckpt["model_state_dict"], strict=True)
+        return model
+    raise ValueError("Unsupported checkpoint format. Expected dict with keys: cfg, model_state_dict.")
+
+
 @torch.no_grad()
-def evaluate(
+def evaluate_mlm_block(
     model: CompactTransformerEncoder,
     loader: DataLoader,
     *,
     device: torch.device,
-    topks: List[int],
     vocab_size: int,
     pad_id: int,
     mask_id: int,
     p_mlm: float,
     use_on_the_fly_masking: bool,
     generator: torch.Generator,
-    token_id_to_group: Optional[Dict[int, int]] = None,
+    topks: List[int],
+    token_id_to_block: Dict[int, int],
     avoid_random_special: bool = False,
 ) -> Dict[str, Any]:
     model.eval()
 
-    totals = {k: {"correct": 0, "total": 0} for k in topks}
-    mrr_vals: List[float] = []
-
-    et_top1_vals: List[float] = []
-    et_topk_vals = {k: [] for k in topks}
-
-    total_eval_positions = 0
-    skipped_batches = 0
-
     avoid_random_ids = None
     if avoid_random_special:
         avoid_random_ids = [int(pad_id), int(mask_id)]
+
+    block_top1_vals: List[float] = []
+    block_topk_vals: Dict[int, List[float]] = {k: [] for k in topks}
+    mrr_vals: List[float] = []
+
+    total_eval_positions = 0
+    skipped_batches = 0
 
     for batch in tqdm(loader):
         input_ids = batch["input_ids"].to(device)
@@ -194,133 +196,88 @@ def evaluate(
         out = model(input_ids=x, attention_mask=attn, event_type_ids=ev, labels=labels, return_hidden=False)
         logits = out["logits"]
 
+        # Block metrics
+        block_top1_vals.append(block_top1_acc_from_logits(logits, labels, token_id_to_block))
         for k in topks:
-            res = topk_accuracy_from_logits(logits, labels, k=k)
-            totals[k]["correct"] += res.correct
-            totals[k]["total"] += res.total
+            block_topk_vals[k].append(block_topk_acc_from_logits(logits, labels, token_id_to_block, k=k))
 
+        # Token-level MRR (optional)
         mrr_vals.append(mrr_from_logits(logits, labels))
 
-        if token_id_to_group is not None:
-            et_top1_vals.append(block_top1_acc_from_logits(logits, labels, token_id_to_group))
-            for k in topks:
-                et_topk_vals[k].append(event_type_topk_acc_from_logits(logits, labels, token_id_to_group, k=k))
+    metrics: Dict[str, Any] = {
+        "mlm_total_eval_positions": int(total_eval_positions),
+        "mlm_skipped_batches_zero_eval_positions": int(skipped_batches),
+        "mlm_block_top1_acc": float(sum(block_top1_vals) / max(1, len(block_top1_vals))),
+        "mlm_mrr_token_level": float(sum(mrr_vals) / max(1, len(mrr_vals))),
+    }
 
-    metrics: Dict[str, Any] = {}
     for k in topks:
-        c = totals[k]["correct"]
-        t = totals[k]["total"]
-        metrics[f"mlm_top{k}_acc"] = c / t if t else float("nan")
-
-    metrics["mlm_mrr"] = float(sum(mrr_vals) / len(mrr_vals)) if mrr_vals else float("nan")
-    metrics["mlm_total_eval_positions"] = int(total_eval_positions)
-    metrics["mlm_skipped_batches_zero_eval_positions"] = int(skipped_batches)
-
-    if token_id_to_group is not None and len(et_top1_vals) > 0:
-        metrics["mlm_event_type_top1_acc"] = float(sum(et_top1_vals) / len(et_top1_vals))
-        for k in topks:
-            xs = et_topk_vals[k]
-            metrics[f"mlm_event_type_top{k}_acc"] = float(sum(xs) / len(xs)) if xs else float("nan")
+        xs = block_topk_vals[k]
+        metrics[f"mlm_block_top{k}_acc"] = float(sum(xs) / max(1, len(xs)))
 
     return metrics
-
-
-def _load_ckpt_and_model(ckpt_path: str) -> CompactTransformerEncoder:
-    ckpt = torch.load(ckpt_path, map_location="cpu")
-    if isinstance(ckpt, dict) and "cfg" in ckpt and "model_state_dict" in ckpt:
-        cfg = CompactTransformerConfig(**ckpt["cfg"])
-        model = CompactTransformerEncoder(cfg)
-        model.load_state_dict(ckpt["model_state_dict"], strict=True)
-        return model
-    # fallback: raw state_dict checkpoints (less ideal)
-    raise ValueError("Unsupported checkpoint format. Expected dict with keys: cfg, model_state_dict.")
 
 
 def main() -> None:
     args = parse_args()
 
+    # reproducibility (also affects window sampling)
+    random.seed(int(args.seed))
+    torch.manual_seed(int(args.seed))
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(int(args.seed))
+
     model = _load_ckpt_and_model(args.ckpt)
-    cfg = model.cfg if hasattr(model, "cfg") else None  # some implementations store cfg on model
+    cfg = model.cfg if hasattr(model, "cfg") else None
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
 
     records = load_jsonl(args.jsonl)
-    # ---- sanity check: token ids must fit ckpt vocab ----
-    vocab_size = int(model.cfg.vocab_size) if hasattr(model, "cfg") else int(model.token_emb.num_embeddings)
 
-    max_id = -1
-    min_id = 10**18
-    for r in records[:5000]:
-        ids = r.get("token_ids") or r.get("ids") or r.get("input_ids") or r.get("tokens")
-        if ids:
-            max_id = max(max_id, max(ids))
-            min_id = min(min_id, min(ids))
-
-    if min_id < 0 or max_id >= vocab_size:
-        raise ValueError(
-            f"JSONL token id range [{min_id},{max_id}] but checkpoint vocab_size={vocab_size}. "
-            "Use a matching checkpoint OR rebuild the JSONL with the checkpoint's vocabulary."
-        )
-
-    
-    # ---- sanity check: token ids must fit ckpt vocab ----
-    max_id = -1
-    for r in records[:5000]:  # reicht meist, sonst entferne die Begrenzung
-        ids = r.get("token_ids") or r.get("ids") or r.get("input_ids") or r.get("tokens")
-        if ids:
-            max_id = max(max_id, max(ids))
-    if max_id >= int(cfg.vocab_size):
-        raise ValueError(
-            f"JSONL contains token id {max_id} but checkpoint vocab_size={cfg.vocab_size}. "
-            "You are using a dataset/vocabulary that does not match this checkpoint."
-        )
+    vocab_size = int(cfg.vocab_size) if cfg is not None and hasattr(cfg, "vocab_size") else int(model.token_emb.num_embeddings)
 
     ds = ClinicalSequenceDataset(
         records,
         max_len=args.max_len,
         pad_id=args.pad_id,
         default_event_type_id=args.default_event_type_id,
+        sample_windows=bool(args.sample_windows),
+        keep_prefix_n=int(args.keep_prefix_n),
+        seed=int(args.seed),
     )
-    loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False)
+    loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False, num_workers=0)
 
     topks = [int(x) for x in args.topk.split(",") if x.strip()]
 
-    # Decide on-the-fly masking
     has_labels = _jsonl_has_labels(args.jsonl, max_check=200)
     use_on_the_fly = bool(args.use_on_the_fly_masking) or (not has_labels)
 
     gen = torch.Generator(device=device)
     gen.manual_seed(int(args.seed))
 
-    token_id_to_group = None
-    if args.vocab_path:
-        from vocabulary import Vocabulary
-        vocab = Vocabulary.load(args.vocab_path)
-        token_id_to_group = build_token_id_to_group_from_vocab(vocab)
+    from vocabulary import Vocabulary
+    vocab = Vocabulary.load(args.vocab_path)
+    token_id_to_block, block_id_to_name, _ = build_token_id_to_block_id_from_vocab(vocab)
 
-    # vocab_size from cfg
-    vocab_size = int(cfg.vocab_size) if cfg is not None else None
-    if vocab_size is None:
-        raise ValueError("Could not infer vocab_size from model cfg.")
-
-    metrics = evaluate(
+    metrics = evaluate_mlm_block(
         model,
         loader,
         device=device,
-        topks=topks,
         vocab_size=vocab_size,
         pad_id=int(args.pad_id),
         mask_id=int(args.mask_id),
         p_mlm=float(args.p_mlm),
         use_on_the_fly_masking=use_on_the_fly,
         generator=gen,
-        token_id_to_group=token_id_to_group,
+        topks=topks,
+        token_id_to_block=token_id_to_block,
         avoid_random_special=bool(args.avoid_random_special),
     )
 
     print(f"device={device}")
     print(f"use_on_the_fly_masking={use_on_the_fly} (jsonl_has_labels={has_labels})")
+    print("block_id_to_name=", block_id_to_name)
     for k, v in metrics.items():
         print(f"{k}={v:.6f}" if isinstance(v, float) else f"{k}={v}")
 
