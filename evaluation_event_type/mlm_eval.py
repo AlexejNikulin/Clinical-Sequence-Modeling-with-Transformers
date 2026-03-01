@@ -1,36 +1,87 @@
 from __future__ import annotations
+<<<<<<< HEAD
 
 # evaluation/mlm_eval.py. -----> for event type
 '''
 This prints: mlm_block_top1_acc and mlm_block_top{k}_acc
 (no exact token accuracy needed; we can keep it, but we said “NOT EXACT TOKENS”).'''
+=======
+>>>>>>> fix/random-window-sampling
 
-'''
-python -m evaluation.mlm_eval \
+"""
+evaluation_event_type/mlm_eval.py  -----> for event type (block eval)
+
+This prints:
+  - mlm_block_top1_acc
+  - mlm_block_top{k}_acc
+
+We evaluate on "Vocabulary blocks" (next-event type), not exact token accuracy.
+Token-level MRR is printed as an additional diagnostic (optional).
+
+Window sampling requirement (from group message):
+- If a sequence exceeds context length (max_len), do NOT always take the first window.
+  Instead: sample a random start position in the context window.
+- IMPORTANT: demographic tokens must always remain at the first positions 0..keep_prefix_n-1
+  independent of the sampled start position.
+- Ideally, also sample sequences shorter than max_len.
+
+Clarification about the common example:
+- The example "[1,2,3,4,5] with max_len=3 => [1,2,3],[2,3,4],[3,4,5]" implicitly shows a
+  sequence WITHOUT a fixed demographic prefix.
+- In our setup, the true sequence is typically:
+    [demo1, demo2, demo3, a, b, c, d, e], max_len=6, keep_prefix_n=3
+  possible sampled windows:
+    [demo1,demo2,demo3, a,b,c]
+    [demo1,demo2,demo3, b,c,d]
+    [demo1,demo2,demo3, c,d,e]
+  This script implements exactly that.
+
+Examples:
+
+# Baseline (no sampling)
+python -m evaluation_event_type.mlm_eval \
   --jsonl data/test_ids.jsonl \
   --ckpt checkpoints/mlm_baseline.pt \
   --topk 1,5,10 \
   --vocab_path data/vocabulary.json
 
-python -m evaluation.mlm_eval \
+# Baseline (WITH window sampling)
+python -m evaluation_event_type.mlm_eval \
   --jsonl data/test_ids.jsonl \
-  --ckpt checkpoints/mlm_n_event_types_7.pt \
+  --ckpt checkpoints/mlm_baseline.pt \
   --topk 1,5,10 \
-  --vocab_path data/vocabulary.json 
+  --vocab_path data/vocabulary.json \
+  --sample_windows \
+  --keep_prefix_n 3 \
+  --seed 13
+"""
 
-python -m evaluation.mlm_eval \
-  --jsonl data/test_ids.jsonl \
-  --ckpt checkpoints/mlm_n_heads_12.pt \
-  --topk 1,5,10 \
-  --vocab_path data/vocabulary.json
-'''
+"""
+evaluation_event_type/mlm_eval.py
 
+<<<<<<< HEAD
 from tqdm import tqdm
+=======
+MLM evaluation by "Vocabulary blocks" (next-event type), NOT exact tokens.
+
+Adds window sampling:
+  --sample_windows
+  --keep_prefix_n
+
+Requirement:
+- random window start for long sequences
+- demographic prefix stays at first keep_prefix_n positions
+- short sequences also sampled (random start in body + padding)
+"""
+
+from __future__ import annotations
+
+>>>>>>> fix/random-window-sampling
 import argparse
+import json
 import os
 import sys
-import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import torch
 from torch.utils.data import DataLoader
@@ -39,7 +90,7 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from evaluation.clinical_eval_utils import (
+from evaluation_event_type.clinical_eval_utils import (
     ClinicalSequenceDataset,
     IGNORE_INDEX,
     load_jsonl,
@@ -54,22 +105,28 @@ from mlm_masking import mlm_mask_801010
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="MLM evaluation by NEXT-EVENT TYPE (Vocabulary block), not exact tokens.")
+    p = argparse.ArgumentParser(description="MLM block evaluation (event-type blocks) with optional window sampling.")
     p.add_argument("--jsonl", type=str, required=True)
     p.add_argument("--ckpt", type=str, required=True)
-    p.add_argument("--vocab_path", type=str, required=True, help="Path to vocabulary.json (required for block eval).")
+    p.add_argument("--vocab_path", type=str, required=True)
 
     p.add_argument("--batch_size", type=int, default=32)
     p.add_argument("--max_len", type=int, default=256)
     p.add_argument("--pad_id", type=int, default=0)
     p.add_argument("--mask_id", type=int, default=1)
     p.add_argument("--default_event_type_id", type=int, default=1)
-    p.add_argument("--topk", type=str, default="1,5,10")
 
+    p.add_argument("--topk", type=str, default="1,5,10")
     p.add_argument("--p_mlm", type=float, default=0.15)
     p.add_argument("--seed", type=int, default=0)
+
     p.add_argument("--avoid_random_special", action="store_true")
     p.add_argument("--use_on_the_fly_masking", action="store_true")
+
+    # sampling
+    p.add_argument("--sample_windows", action="store_true")
+    p.add_argument("--keep_prefix_n", type=int, default=3)
+
     return p.parse_args()
 
 
@@ -115,20 +172,27 @@ def evaluate_mlm_block(
     token_id_to_block: Dict[int, int],
     avoid_random_special: bool = False,
 ) -> Dict[str, Any]:
+    """
+    Weighted aggregation by number of masked/eval positions.
+    """
     model.eval()
 
     avoid_random_ids = None
     if avoid_random_special:
         avoid_random_ids = [int(pad_id), int(mask_id)]
 
-    block_top1_vals: List[float] = []
-    block_topk_vals: Dict[int, List[float]] = {k: [] for k in topks}
-    mrr_vals: List[float] = []
-
     total_eval_positions = 0
     skipped_batches = 0
 
+<<<<<<< HEAD
     for batch in tqdm(loader):
+=======
+    sum_block_top1 = 0.0
+    sum_block_topk = {k: 0.0 for k in topks}
+    sum_mrr = 0.0  # token-level diagnostic
+
+    for batch in loader:
+>>>>>>> fix/random-window-sampling
         input_ids = batch["input_ids"].to(device)
         attn = batch["attention_mask"].to(device)
         ev = batch["event_type_ids"].to(device)
@@ -154,29 +218,29 @@ def evaluate_mlm_block(
         if n_pos == 0:
             skipped_batches += 1
             continue
-        total_eval_positions += n_pos
 
         out = model(input_ids=x, attention_mask=attn, event_type_ids=ev, labels=labels, return_hidden=False)
         logits = out["logits"]
 
-        block_top1_vals.append(block_top1_acc_from_logits(logits, labels, token_id_to_block))
+        b1 = float(block_top1_acc_from_logits(logits, labels, token_id_to_block))
+        sum_block_top1 += b1 * n_pos
+
         for k in topks:
-            block_topk_vals[k].append(block_topk_acc_from_logits(logits, labels, token_id_to_block, k=k))
+            bk = float(block_topk_acc_from_logits(logits, labels, token_id_to_block, k=k))
+            sum_block_topk[k] += bk * n_pos
 
-        # MRR is still token-level rank-based; keep if we want
-        mrr_vals.append(mrr_from_logits(logits, labels))
+        sum_mrr += float(mrr_from_logits(logits, labels)) * n_pos
+        total_eval_positions += n_pos
 
-    metrics: Dict[str, Any] = {}
-    metrics["mlm_total_eval_positions"] = int(total_eval_positions)
-    metrics["mlm_skipped_batches_zero_eval_positions"] = int(skipped_batches)
-
-    metrics["mlm_block_top1_acc"] = float(sum(block_top1_vals) / max(1, len(block_top1_vals)))
+    denom = max(1, total_eval_positions)
+    metrics: Dict[str, Any] = {
+        "mlm_total_eval_positions": int(total_eval_positions),
+        "mlm_skipped_batches_zero_eval_positions": int(skipped_batches),
+        "mlm_block_top1_acc": float(sum_block_top1 / denom),
+        "mlm_mrr_token_level": float(sum_mrr / denom),
+    }
     for k in topks:
-        xs = block_topk_vals[k]
-        metrics[f"mlm_block_top{k}_acc"] = float(sum(xs) / max(1, len(xs)))
-
-    metrics["mlm_mrr_token_level"] = float(sum(mrr_vals) / max(1, len(mrr_vals)))
-
+        metrics[f"mlm_block_top{k}_acc"] = float(sum_block_topk[k] / denom)
     return metrics
 
 
@@ -192,15 +256,6 @@ def main() -> None:
     records = load_jsonl(args.jsonl)
 
     vocab_size = int(cfg.vocab_size) if cfg is not None and hasattr(cfg, "vocab_size") else int(model.token_emb.num_embeddings)
-
-    ds = ClinicalSequenceDataset(
-        records,
-        max_len=args.max_len,
-        pad_id=args.pad_id,
-        default_event_type_id=args.default_event_type_id,
-    )
-    loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False)
-
     topks = [int(x) for x in args.topk.split(",") if x.strip()]
 
     has_labels = _jsonl_has_labels(args.jsonl, max_check=200)
@@ -211,7 +266,18 @@ def main() -> None:
 
     from vocabulary import Vocabulary
     vocab = Vocabulary.load(args.vocab_path)
-    token_id_to_block, block_id_to_name, block_name_to_id = build_token_id_to_block_id_from_vocab(vocab)
+    token_id_to_block, block_id_to_name, _ = build_token_id_to_block_id_from_vocab(vocab)
+
+    ds = ClinicalSequenceDataset(
+        records,
+        max_len=args.max_len,
+        pad_id=args.pad_id,
+        default_event_type_id=args.default_event_type_id,
+        sample_windows=bool(args.sample_windows),
+        keep_prefix_n=int(args.keep_prefix_n),
+        seed=int(args.seed),
+    )
+    loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False)
 
     metrics = evaluate_mlm_block(
         model,
@@ -230,7 +296,9 @@ def main() -> None:
 
     print(f"device={device}")
     print(f"use_on_the_fly_masking={use_on_the_fly} (jsonl_has_labels={has_labels})")
+    print(f"sample_windows={bool(args.sample_windows)} keep_prefix_n={int(args.keep_prefix_n)} max_len={int(args.max_len)}")
     print("block_id_to_name=", block_id_to_name)
+
     for k, v in metrics.items():
         print(f"{k}={v:.6f}" if isinstance(v, float) else f"{k}={v}")
 

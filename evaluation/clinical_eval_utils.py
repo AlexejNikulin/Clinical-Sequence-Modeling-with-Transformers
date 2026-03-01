@@ -1,409 +1,173 @@
-# evaluation/clinical_eval_utils.py
-# Block/type evaluation utilities + Dataset with optional random window sampling.
-# evaluation/clinical_eval_utils.py
-# Utilities for evaluation: loading JSONL, dataset, token-level metrics,
-# and "event-type/block" metrics derived from Vocabulary.*_vocab ranges.
-
-# evaluation/clinical_eval_utils.py
-# ------------------------------------------------------------
-# Utilities for evaluation:
-# - load_jsonl
-# - ClinicalSequenceDataset (optional deterministic random-window sampling)
-# - token-level metrics (top-k, MRR)
-# - block/event-type mapping from Vocabulary.*_vocab dicts
-# - block metrics: top1/topk by block id (event-type accuracy)
-#
-# Notes:
-# - IGNORE_INDEX = -100 matches PyTorch CrossEntropyLoss ignore_index default usage.
-# - "block" here means: token belongs to a vocabulary subspace (diagnosis, lab, med, ...),
-#   not the exact token itself.
-# ------------------------------------------------------------
-
 from __future__ import annotations
+
+"""
+evaluation/clinical_eval_utils.py
+
+Utilities for:
+- loading JSONL evaluation data
+- MLM metrics (token-level MRR, token top-k)
+- block/top-k metrics (via vocab blocks / token-id-to-block mapping)
+- Datasets for evaluation:
+    * ClinicalSequenceDataset (MLM-style batches)
+    * NextEventDataset (next-token / next-event evaluation)
+
+RANDOM WINDOW SAMPLING (core requirement):
+- If a sequence is longer than max_len, do NOT always take the first max_len tokens.
+- Instead, sample a random start position in the BODY (after a fixed prefix).
+- The first keep_prefix_n tokens (e.g. demographic tokens) must always stay at
+  positions [0..keep_prefix_n-1], regardless of the sampled window start.
+
+Additionally:
+- Even short sequences (len <= max_len) are "sampled":
+  we choose a random start in the body and take the tail, then pad.
+  (This reduces bias towards always showing the earliest part of sequences.)
+"""
 
 import json
 import random
-from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 from torch.utils.data import Dataset
 
+
+# ---------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------
+
+# Common ignore index for MLM labels (masked positions use real token id, others use IGNORE_INDEX).
 IGNORE_INDEX = -100
 
 
-# ----------------------------
-# IO
-# ----------------------------
+# ---------------------------------------------------------------------
+# I/O
+# ---------------------------------------------------------------------
+
 def load_jsonl(path: str) -> List[Dict[str, Any]]:
     """
-    Load JSONL records.
-    Allows comment lines starting with "#". If a comment line contains JSON after "#£",
-    it will still be parsed (handy for debug dumps).
+    Load a JSONL file into a list of dicts.
+
+    Each line must be valid JSON.
     """
-    data: List[Dict[str, Any]] = []
+    records: List[Dict[str, Any]] = []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
-
-            if line.startswith("#"):
-                # Allow comment lines like "# ..." or "#£{...}"
-                line = line.lstrip("#").lstrip("£").strip()
-                if not line:
-                    continue
-
-            data.append(json.loads(line))
-    return data
+            records.append(json.loads(line))
+    return records
 
 
-# ----------------------------
-# Dataset
-# ----------------------------
-@dataclass
-class TopKResult:
-    k: int
-    correct: int
-    total: int
+# ---------------------------------------------------------------------
+# Block mapping helper (for "block" evaluation)
+# ---------------------------------------------------------------------
 
-    @property
-    def acc(self) -> float:
-        return self.correct / self.total if self.total else float("nan")
-
-
-class ClinicalSequenceDataset(Dataset):
+def build_token_id_to_block_id_from_vocab(
+    vocab: Any,
+) -> Tuple[Dict[int, int], Dict[int, str], Dict[str, int]]:
     """
-    Expected JSONL keys (any of these for token ids):
-        token_ids / ids / input_ids / tokens : List[int]
+    Build token_id -> block_id mapping from your repo's Vocabulary structure.
 
-    Optional keys:
-        event_type_ids : Optional[List[int]]   (segment/event-type embedding ids)
-        labels         : Optional[List[int]]   (MLM labels; IGNORE_INDEX for non-eval positions)
-        attention_mask : Optional[List[int]]   (1=valid token, 0=pad)
+    Supports a few common patterns:
+    A) vocab.blocks is a list of blocks, each block is dict/object containing:
+         - name
+         - token_ids or ids
+    B) vocab.block_name_to_token_ids is a dict: block_name -> list[token_ids]
 
-    Optional window sampling (useful if sequences are longer than max_len):
-        sample_windows : bool
-        keep_prefix_n  : int   keep first N tokens fixed (e.g., demographics)
-        seed           : int   deterministic random window per (seed + idx)
-
-    IMPORTANT:
-        DataLoader should typically use shuffle=False for evaluation.
-        Window sampling still changes selected subsequence unless you keep seed fixed.
+    Returns:
+      token_id_to_block: token_id -> block_id
+      block_id_to_name: block_id -> human-readable block name
+      block_name_to_id: name -> block_id
     """
-
-    def __init__(
-        self,
-        records: List[Dict[str, Any]],
-        max_len: int,
-        pad_id: int,
-        default_event_type_id: int = 0,
-        *,
-        sample_windows: bool = False,
-        keep_prefix_n: int = 0,
-        seed: int = 0,
-    ):
-        self.records = records
-        self.max_len = int(max_len)
-        self.pad_id = int(pad_id)
-        self.default_event_type_id = int(default_event_type_id)
-
-        self.sample_windows = bool(sample_windows)
-        self.keep_prefix_n = int(keep_prefix_n)
-        self.seed = int(seed)
-
-    def __len__(self) -> int:
-        return len(self.records)
-
-    def _get_token_list(self, r: Dict[str, Any]) -> List[int]:
-        token_ids = r.get("token_ids")
-        if token_ids is None:
-            token_ids = r.get("ids")
-        if token_ids is None:
-            token_ids = r.get("input_ids")
-        if token_ids is None:
-            token_ids = r.get("tokens")
-        if token_ids is None:
-            raise KeyError(
-                f"Record missing token sequence. Expected one of token_ids/ids/input_ids/tokens. Keys={list(r.keys())}"
-            )
-        return list(token_ids)
-
-    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        r = self.records[idx]
-
-        token_ids_full = self._get_token_list(r)
-
-        ev_full = r.get("event_type_ids")
-        lbl_full = r.get("labels")
-        attn_full = r.get("attention_mask")
-
-        ev_full = list(ev_full) if ev_full is not None else None
-        lbl_full = list(lbl_full) if lbl_full is not None else None
-        attn_full = list(attn_full) if attn_full is not None else None
-
-        # ---------------------------------------------------------
-        # Optional deterministic random window sampling
-        # ---------------------------------------------------------
-        if self.sample_windows:
-            kp = max(0, self.keep_prefix_n)
-            L = self.max_len
-
-            prefix_toks = token_ids_full[:kp]
-            rest_toks = token_ids_full[kp:]
-
-            prefix_ev = ev_full[:kp] if ev_full is not None else None
-            rest_ev = ev_full[kp:] if ev_full is not None else None
-
-            prefix_lbl = lbl_full[:kp] if lbl_full is not None else None
-            rest_lbl = lbl_full[kp:] if lbl_full is not None else None
-
-            prefix_attn = attn_full[:kp] if attn_full is not None else None
-            rest_attn = attn_full[kp:] if attn_full is not None else None
-
-            # how many tokens can we take from "rest"?
-            rest_cap = max(0, L - len(prefix_toks))
-
-            # choose window start in rest part
-            if rest_cap > 0 and len(rest_toks) > rest_cap:
-                max_start = len(rest_toks) - rest_cap
-                rr = random.Random(self.seed + idx)  # deterministic per idx given seed
-                start = rr.randint(0, max_start)
-            else:
-                start = 0
-
-            sampled_rest = rest_toks[start : start + rest_cap]
-            sampled_rest_ev = rest_ev[start : start + rest_cap] if rest_ev is not None else None
-            sampled_rest_lbl = rest_lbl[start : start + rest_cap] if rest_lbl is not None else None
-            sampled_rest_attn = rest_attn[start : start + rest_cap] if rest_attn is not None else None
-
-            token_ids = prefix_toks + sampled_rest
-
-            # event types: fill missing with default_event_type_id
-            if prefix_ev is not None or sampled_rest_ev is not None:
-                ev_ids = (prefix_ev if prefix_ev is not None else [self.default_event_type_id] * len(prefix_toks)) + (
-                    sampled_rest_ev if sampled_rest_ev is not None else [self.default_event_type_id] * len(sampled_rest)
-                )
-            else:
-                ev_ids = [self.default_event_type_id] * len(token_ids)
-
-            # labels: fill missing with IGNORE_INDEX
-            if prefix_lbl is not None or sampled_rest_lbl is not None:
-                labels = (prefix_lbl if prefix_lbl is not None else [IGNORE_INDEX] * len(prefix_toks)) + (
-                    sampled_rest_lbl if sampled_rest_lbl is not None else [IGNORE_INDEX] * len(sampled_rest)
-                )
-            else:
-                labels = [IGNORE_INDEX] * len(token_ids)
-
-            # attention mask: fill missing with 1, padding later sets 0
-            if prefix_attn is not None or sampled_rest_attn is not None:
-                attn = (prefix_attn if prefix_attn is not None else [1] * len(prefix_toks)) + (
-                    sampled_rest_attn if sampled_rest_attn is not None else [1] * len(sampled_rest)
-                )
-            else:
-                attn = [1] * len(token_ids)
-
-        else:
-            # ---------------------------------------------------------
-            # Default behavior: truncate from start
-            # ---------------------------------------------------------
-            token_ids = token_ids_full[: self.max_len]
-
-            if ev_full is not None:
-                ev_ids = ev_full[: self.max_len]
-                if len(ev_ids) < len(token_ids):
-                    ev_ids += [self.default_event_type_id] * (len(token_ids) - len(ev_ids))
-            else:
-                ev_ids = [self.default_event_type_id] * len(token_ids)
-
-            if lbl_full is not None:
-                labels = lbl_full[: self.max_len]
-                if len(labels) < len(token_ids):
-                    labels += [IGNORE_INDEX] * (len(token_ids) - len(labels))
-            else:
-                labels = [IGNORE_INDEX] * len(token_ids)
-
-            if attn_full is not None:
-                attn = attn_full[: self.max_len]
-                if len(attn) < len(token_ids):
-                    attn += [1] * (len(token_ids) - len(attn))
-            else:
-                attn = [1] * len(token_ids)
-
-        # ----------------------------
-        # Right-pad to max_len
-        # ----------------------------
-        token_ids = token_ids[: self.max_len]
-        ev_ids = ev_ids[: self.max_len]
-        labels = labels[: self.max_len]
-        attn = attn[: self.max_len]
-
-        pad_n = self.max_len - len(token_ids)
-        token_ids += [self.pad_id] * pad_n
-        ev_ids += [self.default_event_type_id] * pad_n
-        labels += [IGNORE_INDEX] * pad_n
-        attn += [0] * pad_n
-
-        return {
-            "input_ids": torch.tensor(token_ids, dtype=torch.long),
-            "event_type_ids": torch.tensor(ev_ids, dtype=torch.long),
-            "labels": torch.tensor(labels, dtype=torch.long),
-            "attention_mask": torch.tensor(attn, dtype=torch.long),
-        }
-
-
-# ----------------------------
-# Token-level metrics (optional / debugging)
-# ----------------------------
-@torch.no_grad()
-def topk_accuracy_from_logits(
-    logits: torch.Tensor,
-    labels: torch.Tensor,
-    k: int,
-    ignore_index: int = IGNORE_INDEX,
-) -> TopKResult:
-    """
-    Standard token-level top-k accuracy on positions where labels != IGNORE_INDEX.
-    Useful for debugging but your main metric is block/event-type accuracy.
-    """
-    _, _, V = logits.shape
-    lbl = labels.view(-1)
-    log = logits.view(-1, V)
-
-    mask = lbl != ignore_index
-    if mask.sum().item() == 0:
-        return TopKResult(k=k, correct=0, total=0)
-
-    lbl_m = lbl[mask]
-    log_m = log[mask]
-
-    topk = torch.topk(log_m, k=k, dim=-1).indices  # (N,k)
-    correct = (topk == lbl_m.unsqueeze(-1)).any(dim=-1).sum().item()
-    total = lbl_m.numel()
-    return TopKResult(k=k, correct=int(correct), total=int(total))
-
-
-@torch.no_grad()
-def mrr_from_logits(logits: torch.Tensor, labels: torch.Tensor, ignore_index: int = IGNORE_INDEX) -> float:
-    """Token-level mean reciprocal rank (MRR)."""
-    _, _, V = logits.shape
-    lbl = labels.view(-1)
-    log = logits.view(-1, V)
-
-    mask = lbl != ignore_index
-    if mask.sum().item() == 0:
-        return float("nan")
-
-    lbl_m = lbl[mask]
-    log_m = log[mask]
-
-    sorted_idx = torch.argsort(log_m, dim=-1, descending=True)  # (N,V)
-    ranks = (sorted_idx == lbl_m.unsqueeze(-1)).nonzero(as_tuple=False)[:, 1]
-    return float((1.0 / (ranks.float() + 1.0)).mean().item())
-
-
-# ----------------------------
-# Block/event-type mapping from Vocabulary
-# ----------------------------
-def build_token_id_to_block_id_from_vocab(vocab) -> Tuple[Dict[int, int], Dict[int, str], Dict[str, int]]:
-    """
-    Build:
-      - token_id_to_block_id: token_id -> block_id (event-type group)
-      - block_id_to_name: block_id -> readable group name
-      - block_name_to_id: group name -> block_id
-
-    Uses vocab.<something>_vocab dicts (token_str -> token_id). Missing dicts are treated as empty.
-    """
-    block_id_to_name: Dict[int, str] = {
-        0: "special",
-        1: "time",
-        2: "demographic_gender",
-        3: "demographic_age",
-        4: "demographic_race",
-        5: "admission",
-        6: "diagnosis",
-        7: "labevents",
-        8: "medication",
-        9: "omr_bmi",
-        10: "omr_weight",
-        11: "omr_blood_pres",
-        12: "discharge",
-        13: "death",
-        14: "readmission",  # optional legacy
-    }
-    block_name_to_id: Dict[str, int] = {v: k for k, v in block_id_to_name.items()}
-
     token_id_to_block: Dict[int, int] = {}
+    block_id_to_name: Dict[int, str] = {}
+    block_name_to_id: Dict[str, int] = {}
 
-    def add_block(block_name: str, token_to_id: Dict[str, int]) -> None:
-        bid = int(block_name_to_id[block_name])
-        for tid in token_to_id.values():
-            token_id_to_block[int(tid)] = bid
+    # Pattern A: vocab.blocks is a list of blocks
+    if hasattr(vocab, "blocks"):
+        blocks = getattr(vocab, "blocks")
+        if isinstance(blocks, list):
+            for b_id, b in enumerate(blocks):
+                if isinstance(b, dict):
+                    name = str(b.get("name", f"block_{b_id}"))
+                    ids = b.get("token_ids", b.get("ids", []))
+                else:
+                    name = str(getattr(b, "name", f"block_{b_id}"))
+                    ids = getattr(b, "token_ids", getattr(b, "ids", []))
 
-    # Known blocks in your Vocabulary
-    add_block("special", getattr(vocab, "special_vocab", {}))
-    add_block("time", getattr(vocab, "time_vocab", {}))
-    add_block("demographic_gender", getattr(vocab, "dem_gen_vocab", {}))
-    add_block("demographic_age", getattr(vocab, "dem_age_vocab", {}))
-    add_block("demographic_race", getattr(vocab, "dem_race_vocab", {}))
+                block_id_to_name[b_id] = name
+                block_name_to_id[name] = b_id
 
-    add_block("admission", getattr(vocab, "admission_vocab", {}))
-    add_block("diagnosis", getattr(vocab, "diagnosis_vocab", {}))
-    add_block("labevents", getattr(vocab, "labevents_vocab", {}))
-    add_block("medication", getattr(vocab, "medication_vocab", {}))
+                for tid in ids:
+                    token_id_to_block[int(tid)] = b_id
 
-    add_block("omr_bmi", getattr(vocab, "omr_bmi_vocab", {}))
-    add_block("omr_weight", getattr(vocab, "omr_weight_vocab", {}))
-    add_block("omr_blood_pres", getattr(vocab, "omr_blood_pres_vocab", {}))
+            return token_id_to_block, block_id_to_name, block_name_to_id
 
-    add_block("discharge", getattr(vocab, "discharge_vocab", {}))
-    add_block("death", getattr(vocab, "death_vocab", {}))
+    # Pattern B: vocab.block_name_to_token_ids is a dict
+    if hasattr(vocab, "block_name_to_token_ids"):
+        d = getattr(vocab, "block_name_to_token_ids")
+        if isinstance(d, dict):
+            for b_id, (name, ids) in enumerate(d.items()):
+                name = str(name)
+                block_id_to_name[b_id] = name
+                block_name_to_id[name] = b_id
+                for tid in ids:
+                    token_id_to_block[int(tid)] = b_id
+            return token_id_to_block, block_id_to_name, block_name_to_id
 
-    # Optional legacy
-    add_block("readmission", getattr(vocab, "readmission_vocab", {}))
-
-    return token_id_to_block, block_id_to_name, block_name_to_id
-
-
-# Backward-compatible alias (some older files call it "group")
-def build_token_id_to_group_from_vocab(vocab) -> Dict[int, int]:
-    """
-    Backward-compatible helper:
-    returns only token_id -> block_id mapping.
-    """
-    token_id_to_block, _, _ = build_token_id_to_block_id_from_vocab(vocab)
-    return token_id_to_block
+    raise ValueError(
+        "Could not infer vocabulary blocks. Adapt build_token_id_to_block_id_from_vocab() "
+        "to match your Vocabulary structure."
+    )
 
 
-# ----------------------------
-# Block metrics
-# ----------------------------
+# ---------------------------------------------------------------------
+# Metrics
+# ---------------------------------------------------------------------
+
 @torch.no_grad()
-def block_top1_acc_from_logits(
-    logits: torch.Tensor,
-    labels: torch.Tensor,
-    token_id_to_block: Dict[int, int],
-    ignore_index: int = IGNORE_INDEX,
-    default_block_id: int = 0,
-) -> float:
+def mrr_from_logits(logits: torch.Tensor, labels: torch.Tensor) -> float:
     """
-    Block top-1 accuracy:
-      correct if block(argmax_token) == block(true_token) at evaluated positions.
-    """
-    pred = torch.argmax(logits, dim=-1)  # (B,L)
+    Token-level Mean Reciprocal Rank (MRR) on eval positions only.
 
-    mask = labels != ignore_index
+    logits: [B, T, V]
+    labels: [B, T] with IGNORE_INDEX for non-eval positions
+
+    MRR: average of (1 / rank(true_token)) across eval positions.
+    Rank is 1 for best logit, 2 for second, ...
+    """
+    device = logits.device
+    mask = labels != IGNORE_INDEX
     if mask.sum().item() == 0:
-        return float("nan")
+        return 0.0
 
-    pred_ids = pred[mask].view(-1).tolist()
-    true_ids = labels[mask].view(-1).tolist()
+    logits_flat = logits[mask]             # [N, V]
+    labels_flat = labels[mask].to(device)  # [N]
 
-    ok = 0
-    for p, y in zip(pred_ids, true_ids):
-        ok += int(token_id_to_block.get(int(p), default_block_id) == token_id_to_block.get(int(y), default_block_id))
+    true_logits = logits_flat.gather(1, labels_flat.view(-1, 1)).squeeze(1)  # [N]
+    greater = (logits_flat > true_logits.unsqueeze(1)).sum(dim=1)            # [N]
+    rank = greater + 1
+    return float((1.0 / rank.float()).mean().item())
 
-    return ok / max(1, len(true_ids))
+
+@torch.no_grad()
+def token_topk_acc_from_logits(logits: torch.Tensor, labels: torch.Tensor, k: int) -> float:
+    """
+    Token-level top-k accuracy on eval positions only.
+
+    A position is correct if the true token id appears in top-k predictions.
+    """
+    mask = labels != IGNORE_INDEX
+    if mask.sum().item() == 0:
+        return 0.0
+
+    logits_flat = logits[mask]  # [N, V]
+    labels_flat = labels[mask]  # [N]
+
+    topk = logits_flat.topk(k, dim=1).indices  # [N, k]
+    correct = (topk == labels_flat.unsqueeze(1)).any(dim=1).float().mean().item()
+    return float(correct)
 
 
 @torch.no_grad()
@@ -412,26 +176,441 @@ def block_topk_acc_from_logits(
     labels: torch.Tensor,
     token_id_to_block: Dict[int, int],
     k: int,
-    ignore_index: int = IGNORE_INDEX,
-    default_block_id: int = 0,
 ) -> float:
     """
-    Block top-k accuracy:
-      hit if ANY token among top-k has the same block as the true token.
+    Block-level top-k accuracy on eval positions only.
+    A position is correct if ANY of the top-k predicted token IDs maps to the same block
+    as the true label token ID.
     """
-    topk = torch.topk(logits, k=k, dim=-1).indices  # (B,L,k)
+    if k <= 0:
+        raise ValueError("k must be >= 1")
 
-    mask = labels != ignore_index
+    mask = labels != IGNORE_INDEX
     if mask.sum().item() == 0:
-        return float("nan")
+        return 0.0
 
-    topk_list = topk[mask].view(-1, k).tolist()
-    true_ids = labels[mask].view(-1).tolist()
+    logits_flat = logits[mask]   # [N, V]
+    labels_flat = labels[mask]   # [N]
 
-    ok = 0
-    for preds, y in zip(topk_list, true_ids):
-        by = token_id_to_block.get(int(y), default_block_id)
-        hit = any(token_id_to_block.get(int(p), default_block_id) == by for p in preds)
-        ok += int(hit)
+    # Map true token ids -> blocks
+    true_blocks = torch.tensor(
+        [token_id_to_block.get(int(tid), -1) for tid in labels_flat.tolist()],
+        device=logits.device,
+        dtype=torch.long,
+    )  # [N]
 
-    return ok / max(1, len(true_ids))
+    # Top-k predicted token ids
+    topk_ids = logits_flat.topk(k, dim=1).indices  # [N, k]
+
+    # Map predicted token ids -> blocks
+    pred_blocks = torch.empty_like(topk_ids, dtype=torch.long)
+    for i in range(topk_ids.size(0)):
+        for j in range(topk_ids.size(1)):
+            pred_blocks[i, j] = int(token_id_to_block.get(int(topk_ids[i, j].item()), -1))
+
+    correct = (pred_blocks == true_blocks.unsqueeze(1)).any(dim=1).float().mean().item()
+    return float(correct)
+
+
+# ---------------------------------------------------------------------
+# Window Sampling (core requirement)
+# ---------------------------------------------------------------------
+
+def sample_window_keep_prefix_start(
+    seq_len: int,
+    *,
+    max_len: int,
+    keep_prefix_n: int,
+    rng: random.Random,
+) -> int:
+    """
+    Sample ONLY the start index within the BODY (0-based, in body-space).
+
+    We sample exactly one start value and reuse it for all aligned arrays:
+      - input_ids
+      - event_type_ids
+      - labels
+
+    Definitions:
+      prefix_len = min(keep_prefix_n, seq_len)
+      body_len   = seq_len - prefix_len
+      body_cap   = max_len - prefix_len    (how many body tokens can fit in window)
+
+    Cases:
+      - body_len == 0 -> return 0
+      - max_len <= prefix_len -> return 0 (window can hold only prefix)
+      - if body_len <= body_cap:
+          * short/equal sequences: still sample start in [0..body_len-1]
+          * later we take tail body[start:] and pad
+      - else:
+          * long sequences: sample start in [0..body_len-body_cap] (crop window)
+    """
+    if max_len <= 0:
+        raise ValueError("max_len must be > 0")
+    if keep_prefix_n < 0:
+        raise ValueError("keep_prefix_n must be >= 0")
+
+    prefix_len = min(keep_prefix_n, seq_len)
+    body_len = max(0, seq_len - prefix_len)
+
+    if body_len == 0:
+        return 0
+    if max_len <= prefix_len:
+        return 0
+
+    body_cap = max_len - prefix_len
+
+    if body_len <= body_cap:
+        return rng.randint(0, body_len - 1)
+
+    return rng.randint(0, body_len - body_cap)
+
+
+def apply_window_keep_prefix(
+    seq: List[int],
+    *,
+    max_len: int,
+    keep_prefix_n: int,
+    start_in_body: int,
+) -> List[int]:
+    """
+    Apply the sampled start_in_body (body-space index) to a sequence.
+
+    Rule:
+      - keep prefix fixed at beginning: seq[:prefix_len]
+      - body = seq[prefix_len:]
+      - if body short: return prefix + body[start:]
+      - if body long:  return prefix + body[start:start+body_cap]
+      - padding happens later in Dataset
+    """
+    prefix_len = min(keep_prefix_n, len(seq))
+    prefix = seq[:prefix_len]
+    body = seq[prefix_len:]
+
+    # If window cannot hold any body tokens
+    if max_len <= prefix_len:
+        return prefix[:max_len]
+
+    body_cap = max_len - prefix_len
+
+    if not body:
+        return prefix
+
+    # Safety clamp: ensure start_in_body valid
+    start_in_body = max(0, min(start_in_body, len(body) - 1))
+
+    # Short body: take tail
+    if len(body) <= body_cap:
+        return prefix + body[start_in_body:]
+
+    # Long body: crop (ensure we have body_cap tokens)
+    start_in_body = min(start_in_body, len(body) - body_cap)
+    return prefix + body[start_in_body : start_in_body + body_cap]
+
+
+# ---------------------------------------------------------------------
+# Dataset(s)
+# ---------------------------------------------------------------------
+
+def _ensure_int_list(x: Any, name: str) -> List[int]:
+    """
+    Ensure x is a list[int]. If x is None -> [].
+    """
+    if x is None:
+        return []
+    if not isinstance(x, list):
+        raise TypeError(f"{name} must be a list, got {type(x)}")
+    out: List[int] = []
+    for i, v in enumerate(x):
+        if not isinstance(v, int):
+            raise TypeError(f"{name}[{i}] must be int, got {type(v)}")
+        out.append(v)
+    return out
+
+
+class ClinicalSequenceDataset(Dataset):
+    """
+    MLM evaluation dataset.
+
+    Supported token sequence keys (first found wins):
+      - input_ids
+      - tokens
+      - token_ids
+      - ids
+
+    Optional keys:
+      - event_type_ids or event_types (must match token length)
+      - labels (must match token length)
+
+    If sample_windows=True:
+      - sample one start in BODY (after prefix)
+      - apply same start to input_ids, event_type_ids, labels
+      - pad to max_len
+    """
+
+    def __init__(
+        self,
+        records: List[Dict[str, Any]],
+        *,
+        max_len: int,
+        pad_id: int,
+        default_event_type_id: int,
+        sample_windows: bool = False,
+        keep_prefix_n: int = 3,
+        seed: int = 0,
+    ) -> None:
+        self.records = records
+        self.max_len = int(max_len)
+        self.pad_id = int(pad_id)
+        self.default_event_type_id = int(default_event_type_id)
+        self.sample_windows = bool(sample_windows)
+        self.keep_prefix_n = int(keep_prefix_n)
+        self.seed = int(seed)
+
+    def __len__(self) -> int:
+        return len(self.records)
+
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        r = self.records[idx]
+
+        # 1) Tokens
+        input_ids_raw = r.get("input_ids") or r.get("tokens") or r.get("token_ids") or r.get("ids")
+        input_ids = _ensure_int_list(input_ids_raw, "input_ids/tokens/token_ids/ids")
+        if not input_ids:
+            input_ids = [self.pad_id]
+
+        # 2) Event types (optional but if provided must be aligned)
+        ev_raw = r.get("event_type_ids", r.get("event_types"))
+        event_type_ids = _ensure_int_list(ev_raw, "event_type_ids/event_types")
+        if not event_type_ids:
+            event_type_ids = [self.default_event_type_id] * len(input_ids)
+        elif len(event_type_ids) != len(input_ids):
+            raise ValueError(f"event_type_ids length != input_ids length at idx={idx}")
+
+        # 3) Labels (optional but if provided must be aligned)
+        labels_list: Optional[List[int]] = None
+        if "labels" in r and r["labels"] is not None:
+            labels_list = _ensure_int_list(r["labels"], "labels")
+            if len(labels_list) != len(input_ids):
+                raise ValueError(f"labels length != input_ids length at idx={idx}")
+
+        # 4) Window sampling
+        if self.sample_windows:
+            # Deterministic RNG per record (same seed + same idx => reproducible)
+            rng = random.Random(self.seed + idx)
+
+            start = sample_window_keep_prefix_start(
+                seq_len=len(input_ids),
+                max_len=self.max_len,
+                keep_prefix_n=self.keep_prefix_n,
+                rng=rng,
+            )
+
+            # Apply exact same start to all arrays to keep alignment intact
+            input_ids = apply_window_keep_prefix(
+                input_ids,
+                max_len=self.max_len,
+                keep_prefix_n=self.keep_prefix_n,
+                start_in_body=start,
+            )
+            event_type_ids = apply_window_keep_prefix(
+                event_type_ids,
+                max_len=self.max_len,
+                keep_prefix_n=self.keep_prefix_n,
+                start_in_body=start,
+            )
+            if labels_list is not None:
+                labels_list = apply_window_keep_prefix(
+                    labels_list,
+                    max_len=self.max_len,
+                    keep_prefix_n=self.keep_prefix_n,
+                    start_in_body=start,
+                )
+        else:
+            # Deterministic "first window" behavior
+            input_ids = input_ids[: self.max_len]
+            event_type_ids = event_type_ids[: self.max_len]
+            if labels_list is not None:
+                labels_list = labels_list[: self.max_len]
+
+        # 5) Pad to max_len
+        T = len(input_ids)
+        pad_len = self.max_len - T
+
+        if pad_len > 0:
+            input_ids = input_ids + [self.pad_id] * pad_len
+            event_type_ids = event_type_ids + [self.default_event_type_id] * pad_len
+            if labels_list is not None:
+                labels_list = labels_list + [IGNORE_INDEX] * pad_len
+
+        # Attention mask: 1 for real tokens, 0 for padding
+        attention_mask = ([1] * min(T, self.max_len)) + ([0] * max(0, pad_len))
+        attention_mask = attention_mask[: self.max_len]
+
+        if labels_list is None:
+            labels_list = [IGNORE_INDEX] * self.max_len
+
+        return {
+            "input_ids": torch.tensor(input_ids, dtype=torch.long),
+            "attention_mask": torch.tensor(attention_mask, dtype=torch.long),
+            "event_type_ids": torch.tensor(event_type_ids, dtype=torch.long),
+            "labels": torch.tensor(labels_list, dtype=torch.long),
+        }
+
+
+class NextEventDataset(Dataset):
+    """
+    Next-event evaluation dataset:
+
+    Returns:
+      - input_ids: [max_len]
+      - attention_mask: [max_len]
+      - event_type_ids: [max_len]
+      - target_id: scalar int (the next token after the context window)
+
+    Sampling rule:
+      - Prefix stays fixed.
+      - Random start in BODY.
+      - Must leave 1 token as the target (if possible).
+    """
+
+    def __init__(
+        self,
+        records: List[Dict[str, Any]],
+        *,
+        max_len: int,
+        pad_id: int,
+        default_event_type_id: int,
+        sample_windows: bool = False,
+        keep_prefix_n: int = 3,
+        seed: int = 0,
+    ) -> None:
+        self.records = records
+        self.max_len = int(max_len)
+        self.pad_id = int(pad_id)
+        self.default_event_type_id = int(default_event_type_id)
+        self.sample_windows = bool(sample_windows)
+        self.keep_prefix_n = int(keep_prefix_n)
+        self.seed = int(seed)
+
+    def __len__(self) -> int:
+        return len(self.records)
+
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        r = self.records[idx]
+
+        seq_raw = r.get("input_ids") or r.get("tokens") or r.get("token_ids") or r.get("ids")
+        seq = _ensure_int_list(seq_raw, "input_ids/tokens/token_ids/ids")
+        if not seq:
+            seq = [self.pad_id]
+
+        ev_raw = r.get("event_type_ids", r.get("event_types"))
+        event_type_ids = _ensure_int_list(ev_raw, "event_type_ids/event_types")
+        if not event_type_ids:
+            event_type_ids = [self.default_event_type_id] * len(seq)
+        elif len(event_type_ids) != len(seq):
+            raise ValueError(f"event_type_ids length != seq length at idx={idx}")
+
+        # Degenerate case: no real "next" token possible
+        if len(seq) < 2:
+            x = seq[:1]
+            y = self.pad_id
+            ev = event_type_ids[:1]
+        else:
+            prefix_len = min(self.keep_prefix_n, len(seq))
+            prefix = seq[:prefix_len]
+            body = seq[prefix_len:]
+
+            ev_prefix = event_type_ids[:prefix_len]
+            ev_body = event_type_ids[prefix_len:]
+
+            if not body:
+                # Only prefix exists, no next token in body
+                x = prefix[: self.max_len]
+                y = self.pad_id
+                ev = ev_prefix[: len(x)]
+            else:
+                # If max_len can't fit any body tokens, input is prefix only, target is first body token
+                if self.max_len <= prefix_len:
+                    x = prefix[: self.max_len]
+                    y = body[0]
+                    ev = ev_prefix[: len(x)]
+                else:
+                    body_cap = self.max_len - prefix_len
+
+                    # Need to leave 1 token for target if possible
+                    max_body_for_input = min(body_cap, len(body) - 1)
+
+                    if max_body_for_input <= 0:
+                        # Input = prefix only, target = first body token
+                        x = prefix
+                        y = body[0]
+                        ev = ev_prefix
+                    else:
+                        if self.sample_windows:
+                            rng = random.Random(self.seed + idx)
+                            # start is chosen so that target exists after input slice
+                            start = rng.randint(0, (len(body) - 1) - max_body_for_input)
+                        else:
+                            start = 0
+
+                        x = prefix + body[start : start + max_body_for_input]
+                        y = body[start + max_body_for_input]
+                        ev = ev_prefix + ev_body[start : start + max_body_for_input]
+
+        # Pad x to max_len
+        T = len(x)
+        pad_len = self.max_len - T
+        if pad_len > 0:
+            x = x + [self.pad_id] * pad_len
+            ev = ev + [self.default_event_type_id] * pad_len
+
+        attn = ([1] * min(T, self.max_len)) + ([0] * max(0, pad_len))
+        attn = attn[: self.max_len]
+
+        return {
+            "input_ids": torch.tensor(x[: self.max_len], dtype=torch.long),
+            "attention_mask": torch.tensor(attn, dtype=torch.long),
+            "event_type_ids": torch.tensor(ev[: self.max_len], dtype=torch.long),
+            "target_id": torch.tensor(int(y), dtype=torch.long),
+        }
+
+
+# ---------------------------------------------------------------------
+# Self-test helper (optional, for debugging)
+# ---------------------------------------------------------------------
+
+def test() -> str:
+    """
+    Quick self-test for random window sampling.
+
+    This is meant to be called via:
+      python - <<'PY'
+      import evaluation.clinical_eval_utils as m
+      print(m.test())
+      PY
+    """
+    seq = [101, 102, 103, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    max_len = 6
+    keep_prefix_n = 3
+
+    starts = set()
+    for i in range(30):
+        rng = random.Random(13 + i)
+        s = sample_window_keep_prefix_start(
+            len(seq),
+            max_len=max_len,
+            keep_prefix_n=keep_prefix_n,
+            rng=rng,
+        )
+        win = apply_window_keep_prefix(
+            seq,
+            max_len=max_len,
+            keep_prefix_n=keep_prefix_n,
+            start_in_body=s,
+        )
+        assert win[:3] == [101, 102, 103]
+        assert len(win) <= max_len
+        starts.add(s)
+
+    return f"OK: prefix fixed, unique starts={sorted(starts)}"
