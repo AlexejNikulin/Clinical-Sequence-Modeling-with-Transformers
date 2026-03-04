@@ -63,64 +63,73 @@ def load_jsonl(path: str) -> List[Dict[str, Any]]:
 # Block mapping helper (for "block" evaluation)
 # ---------------------------------------------------------------------
 
-def build_token_id_to_block_id_from_vocab(
-    vocab: Any,
-) -> Tuple[Dict[int, int], Dict[int, str], Dict[str, int]]:
+def build_token_id_to_block_id_from_vocab(vocab) -> Tuple[Dict[int, int], Dict[int, str], Dict[str, int]]:
     """
-    Build token_id -> block_id mapping from your repo's Vocabulary structure.
+    Build:
+      - token_id_to_block_id: token_id -> block_id (event-type group)
+      - block_id_to_name: block_id -> readable group name
+      - block_name_to_id: group name -> block_id
 
-    Supports a few common patterns:
-    A) vocab.blocks is a list of blocks, each block is dict/object containing:
-         - name
-         - token_ids or ids
-    B) vocab.block_name_to_token_ids is a dict: block_name -> list[token_ids]
-
-    Returns:
-      token_id_to_block: token_id -> block_id
-      block_id_to_name: block_id -> human-readable block name
-      block_name_to_id: name -> block_id
+    Uses vocab.<something>_vocab dicts (token_str -> token_id). Missing dicts are treated as empty.
     """
+    block_id_to_name: Dict[int, str] = {
+        0: "special",
+        1: "time",
+        2: "demographic_gender",
+        3: "demographic_age",
+        4: "demographic_race",
+        5: "admission",
+        6: "diagnosis",
+        7: "labevents",
+        8: "medication",
+        9: "omr_bmi",
+        10: "omr_weight",
+        11: "omr_blood_pres",
+        12: "discharge",
+        13: "death",
+        14: "readmission",  # optional legacy
+    }
+    block_name_to_id: Dict[str, int] = {v: k for k, v in block_id_to_name.items()}
+
     token_id_to_block: Dict[int, int] = {}
-    block_id_to_name: Dict[int, str] = {}
-    block_name_to_id: Dict[str, int] = {}
 
-    # Pattern A: vocab.blocks is a list of blocks
-    if hasattr(vocab, "blocks"):
-        blocks = getattr(vocab, "blocks")
-        if isinstance(blocks, list):
-            for b_id, b in enumerate(blocks):
-                if isinstance(b, dict):
-                    name = str(b.get("name", f"block_{b_id}"))
-                    ids = b.get("token_ids", b.get("ids", []))
-                else:
-                    name = str(getattr(b, "name", f"block_{b_id}"))
-                    ids = getattr(b, "token_ids", getattr(b, "ids", []))
+    def add_block(block_name: str, token_to_id: Dict[str, int]) -> None:
+        bid = int(block_name_to_id[block_name])
+        for tid in token_to_id.values():
+            token_id_to_block[int(tid)] = bid
 
-                block_id_to_name[b_id] = name
-                block_name_to_id[name] = b_id
+    # Known blocks in your Vocabulary
+    add_block("special", getattr(vocab, "special_vocab", {}))
+    add_block("time", getattr(vocab, "time_vocab", {}))
+    add_block("demographic_gender", getattr(vocab, "dem_gen_vocab", {}))
+    add_block("demographic_age", getattr(vocab, "dem_age_vocab", {}))
+    add_block("demographic_race", getattr(vocab, "dem_race_vocab", {}))
 
-                for tid in ids:
-                    token_id_to_block[int(tid)] = b_id
+    add_block("admission", getattr(vocab, "admission_vocab", {}))
+    add_block("diagnosis", getattr(vocab, "diagnosis_vocab", {}))
+    add_block("labevents", getattr(vocab, "labevents_vocab", {}))
+    add_block("medication", getattr(vocab, "medication_vocab", {}))
 
-            return token_id_to_block, block_id_to_name, block_name_to_id
+    add_block("omr_bmi", getattr(vocab, "omr_bmi_vocab", {}))
+    add_block("omr_weight", getattr(vocab, "omr_weight_vocab", {}))
+    add_block("omr_blood_pres", getattr(vocab, "omr_blood_pres_vocab", {}))
 
-    # Pattern B: vocab.block_name_to_token_ids is a dict
-    if hasattr(vocab, "block_name_to_token_ids"):
-        d = getattr(vocab, "block_name_to_token_ids")
-        if isinstance(d, dict):
-            for b_id, (name, ids) in enumerate(d.items()):
-                name = str(name)
-                block_id_to_name[b_id] = name
-                block_name_to_id[name] = b_id
-                for tid in ids:
-                    token_id_to_block[int(tid)] = b_id
-            return token_id_to_block, block_id_to_name, block_name_to_id
+    add_block("discharge", getattr(vocab, "discharge_vocab", {}))
+    add_block("death", getattr(vocab, "death_vocab", {}))
 
-    raise ValueError(
-        "Could not infer vocabulary blocks. Adapt build_token_id_to_block_id_from_vocab() "
-        "to match your Vocabulary structure."
-    )
+    # Optional legacy
+    add_block("readmission", getattr(vocab, "readmission_vocab", {}))
 
+    return token_id_to_block, block_id_to_name, block_name_to_id
+
+# Backward-compatible alias (some older files call it "group")
+def build_token_id_to_group_from_vocab(vocab) -> Dict[int, int]:
+    """
+    Backward-compatible helper:
+    returns only token_id -> block_id mapping.
+    """
+    token_id_to_block, _, _ = build_token_id_to_block_id_from_vocab(vocab)
+    return token_id_to_block
 
 # ---------------------------------------------------------------------
 # Metrics
