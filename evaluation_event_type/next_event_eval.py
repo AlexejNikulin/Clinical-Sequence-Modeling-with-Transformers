@@ -1,3 +1,4 @@
+from __future__ import annotations
 '''evaluation/next_event_eval.py.  ----> for event type 
 PATH:
 
@@ -19,12 +20,12 @@ Adds window sampling:
   --keep_prefix_n
 """
 
-from __future__ import annotations
 
 import argparse
 import os
 import sys
 from typing import Any, Dict, List
+from tqdm import tqdm
 
 import torch
 from torch.utils.data import DataLoader
@@ -33,9 +34,13 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from evaluation_event_type.clinical_eval_utils import load_jsonl, NextEventDataset, build_token_id_to_block_id_from_vocab
 from compact_transformer_encoder import CompactTransformerConfig, CompactTransformerEncoder
 
+from evaluation.clinical_eval_utils import (
+    build_token_id_to_block_id_from_vocab,
+    NextEventDataset,
+    load_jsonl
+)
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Next-event block evaluation with optional window sampling.")
@@ -52,7 +57,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--topk", type=str, default="1,5,10")
     p.add_argument("--seed", type=int, default=0)
 
-    p.add_argument("--sample_windows", action="store_true")
+    p.add_argument("--sample_windows", type=bool, default=True)
     p.add_argument("--keep_prefix_n", type=int, default=3)
 
     return p.parse_args()
@@ -82,7 +87,7 @@ def evaluate_next_event_block(
     total = 0
     correct_topk = {k: 0 for k in topks}
 
-    for batch in loader:
+    for batch in tqdm(loader):
         input_ids = batch["input_ids"].to(device)
         attn = batch["attention_mask"].to(device)
         ev = batch["event_type_ids"].to(device)

@@ -1,3 +1,4 @@
+from __future__ import annotations
 '''
 Docstring für evaluation.next_event_eval
 
@@ -65,12 +66,12 @@ Same requirement:
 - also short sequences "sampled" (random start in body, then padding)
 """
 
-from __future__ import annotations
 
 import argparse
 import os
 import sys
 from typing import Any, Dict, List
+from tqdm import tqdm
 
 import torch
 from torch.utils.data import DataLoader
@@ -79,7 +80,7 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from evaluation.clinical_eval_utils import load_jsonl, NextEventDataset
+from evaluation.clinical_eval_utils import ClinicalSequenceDataset, load_jsonl, NextEventDataset, mrr_from_logits
 from compact_transformer_encoder import CompactTransformerConfig, CompactTransformerEncoder
 
 
@@ -98,7 +99,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=0)
 
     # sampling flags
-    p.add_argument("--sample_windows", action="store_true")
+    p.add_argument("--sample_windows", type=bool, default=True)
     p.add_argument("--keep_prefix_n", type=int, default=3)
 
     return p.parse_args()
@@ -113,6 +114,17 @@ def _load_ckpt_and_model(ckpt_path: str) -> CompactTransformerEncoder:
         return model
     raise ValueError("Unsupported checkpoint format. Expected dict with keys: cfg, model_state_dict.")
 
+@torch.no_grad()
+def _token_topk_acc(logits: torch.Tensor, labels: torch.Tensor, k: int) -> float:
+    mask = labels != -100
+    if mask.sum().item() == 0:
+        return 0.0
+    logits_flat = logits[mask]     # [N, V]
+    labels_flat = labels[mask]     # [N]
+    topk = logits_flat.topk(k, dim=1).indices
+    correct = (topk == labels_flat.unsqueeze(1)).any(dim=1).float().mean().item()
+    return float(correct)
+
 
 @torch.no_grad()
 def evaluate_next_event(
@@ -124,34 +136,56 @@ def evaluate_next_event(
 ) -> Dict[str, Any]:
     model.eval()
 
-    total = 0
-    correct_topk = {k: 0 for k in topks}
+    total_eval_positions = 0
+    skipped_batches = 0
 
-    for batch in loader:
+    sum_topk = {k: 0.0 for k in topks}
+    sum_mrr = 0.0
+
+    for batch in tqdm(loader):
         input_ids = batch["input_ids"].to(device)
         attn = batch["attention_mask"].to(device)
         ev = batch["event_type_ids"].to(device)
-        target_id = batch["target_id"].to(device)  # [B]
 
-        # Forward without MLM labels: we use last visible token position to predict next.
-        out = model(input_ids=input_ids, attention_mask=attn, event_type_ids=ev, labels=None, return_hidden=False)
-        logits = out["logits"]  # [B, T, V]
+        B, L = input_ids.shape
+        labels = torch.full((B, L), -100, dtype=torch.long, device=device)
 
-        # index of last non-pad token = sum(attn)-1
-        last_pos = (attn.sum(dim=1) - 1).clamp(min=0)  # [B]
-        last_logits = logits[torch.arange(logits.size(0), device=device), last_pos, :]  # [B, V]
+        # Mask the last valid position in each sequence
+        x = input_ids.clone()
+        for b in range(B):
+            valid = (attn[b] == 1).nonzero(as_tuple=False).view(-1)
+            if valid.numel() < 1:
+                continue
+            last_idx = int(valid[-1].item())
+            y = int(x[b, last_idx].item())
+            labels[b, last_idx] = y
+            x[b, last_idx] = int(1)
+
+        n_pos = int((labels != -100).sum().item())
+        if n_pos == 0:
+            skipped_batches += 1
+            continue
+
+        out = model(input_ids=x, attention_mask=attn, event_type_ids=ev, labels=labels, return_hidden=False)
+        logits = out["logits"]
 
         for k in topks:
-            topk_ids = last_logits.topk(k, dim=1).indices  # [B, k]
-            correct = (topk_ids == target_id.unsqueeze(1)).any(dim=1).sum().item()
-            correct_topk[k] += int(correct)
+            acc = _token_topk_acc(logits, labels, k=k)
+            sum_topk[k] += acc * n_pos
 
-        total += int(target_id.numel())
+        mrr = float(mrr_from_logits(logits, labels))
+        sum_mrr += mrr * n_pos
 
-    metrics: Dict[str, Any] = {"next_event_total": int(total)}
-    denom = max(1, total)
+        total_eval_positions += n_pos
+
+    denom = max(1, total_eval_positions)
+    metrics: Dict[str, Any] = {
+        "next_event_total_eval_positions": int(total_eval_positions),
+        "next_event_skipped_batches_zero_eval_positions": int(skipped_batches),
+        "next_event_mrr": float(sum_mrr / denom),
+    }
     for k in topks:
-        metrics[f"next_event_top{k}_acc"] = float(correct_topk[k] / denom)
+        metrics[f"next_event_top{k}_acc"] = float(sum_topk[k] / denom)
     return metrics
 
 
@@ -165,7 +199,7 @@ def main() -> None:
     records = load_jsonl(args.jsonl)
     topks = [int(x) for x in args.topk.split(",") if x.strip()]
 
-    ds = NextEventDataset(
+    ds = ClinicalSequenceDataset(
         records,
         max_len=args.max_len,
         pad_id=args.pad_id,

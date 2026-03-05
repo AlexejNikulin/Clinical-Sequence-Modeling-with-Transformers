@@ -68,6 +68,7 @@ import argparse
 import json
 import os
 import sys
+from tqdm import tqdm
 from typing import Any, Dict, List
 
 import torch
@@ -111,7 +112,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--use_on_the_fly_masking", action="store_true")
 
     # sampling
-    p.add_argument("--sample_windows", action="store_true")
+    p.add_argument("--sample_windows", type=bool, default=True)
     p.add_argument("--keep_prefix_n", type=int, default=3)
 
     return p.parse_args()
@@ -175,7 +176,7 @@ def evaluate_mlm_block(
     sum_block_topk = {k: 0.0 for k in topks}
     sum_mrr = 0.0  # token-level diagnostic
 
-    for batch in loader:
+    for batch in tqdm(loader):
         input_ids = batch["input_ids"].to(device)
         attn = batch["attention_mask"].to(device)
         ev = batch["event_type_ids"].to(device)

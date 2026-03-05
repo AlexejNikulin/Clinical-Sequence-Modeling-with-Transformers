@@ -46,8 +46,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--seed",
         type=int,
-        default=None,
-        help="Optional RNG seed for reproducible sampling (python + torch). If omitted, evaluation is random.",
+        default=0,
+        help="Optional RNG seed for reproducible sampling (python + torch). Defaults to 0",
     )
 
     # stop-vocab IDs (vocab/group IDs, NOT token IDs)

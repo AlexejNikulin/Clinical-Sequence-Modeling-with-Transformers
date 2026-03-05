@@ -42,7 +42,7 @@ def parse_args() -> argparse.Namespace:
     )
 
     p.add_argument("--topk", type=str, default="1,5,10")
-    p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--seed", type=int, default=0)
     p.add_argument("--horizon", type=int, default=10)
 
     p.add_argument("--subset_frac", type=float, default=0.05)

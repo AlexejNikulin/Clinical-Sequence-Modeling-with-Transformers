@@ -53,8 +53,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--seed",
         type=int,
-        default=None,
-        help="Optional RNG seed for reproducible sampling (python + torch). If omitted, evaluation is fully random.",
+        default=0,
+        help="Optional RNG seed for reproducible sampling (python + torch). Defaults to 0",
     )
 
     p.add_argument(

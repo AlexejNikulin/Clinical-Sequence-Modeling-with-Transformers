@@ -47,8 +47,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--seed",
         type=int,
-        default=None,
-        help="Optional RNG seed for reproducible sampling. If omitted, evaluation is fully random.",
+        default=0,
+        help="Optional RNG seed for reproducible sampling. Defaults to 0.",
     )
 
     # --- stop-vocab support (vocab/group IDs) ---
