@@ -1,5 +1,97 @@
 # Clinical-Sequence-Modeling-with-Transformers
-This project focuses on building a transformer-based clinical sequence model from scratch using temporal ICD-10 event histories extracted from the MIMIC-IV database.
+
+This project focuses on building a transformer-based clinical sequence model from scratch using temporal clinical event histories extracted from the MIMIC-IV database.
+
+The goal is to model patient trajectories by representing medical histories as ordered sequences of events such as diagnoses, laboratory measurements, medications, and admission events. A compact transformer encoder is trained on these sequences using a masked language modeling objective in order to learn contextual relationships between clinical events.
+
+The trained model is evaluated on tasks such as masked event prediction and next-event prediction.
+
+---
+
+## Project Pipeline
+
+The overall workflow of the project consists of four main steps:
+
+### 1. Data Extraction
+
+Clinical events are extracted from multiple tables of the **MIMIC-IV hospital module**, including:
+
+- `patients`
+- `admissions`
+- `labevents`
+- `diagnoses_icd`
+- `emar`
+- `omr`
+
+These tables contain demographic information, diagnoses, laboratory measurements, medications, and admission-related data.
+
+---
+
+### 2. Data Preprocessing
+
+The extracted events are processed to create a unified representation of patient histories.
+
+Key steps include:
+
+- cleaning and normalizing event values  
+- aligning timestamps across different data sources  
+- merging events from multiple tables  
+- constructing chronological patient event sequences  
+
+Each patient is represented as a sequence of clinical events ordered by time.
+
+---
+
+### 3. Tokenization
+
+Clinical events are converted into discrete tokens that can be processed by the model.
+
+This includes:
+
+- creating a vocabulary of event tokens  
+- adding special tokens such as `[PAD]`, `[MASK]`, and `[UNK]`  
+- encoding demographic information  
+- adding time tokens to represent temporal gaps between events  
+
+The resulting sequences are used as input to the transformer model.
+
+---
+
+### 4. Model Training
+
+A compact **transformer encoder** is trained on the tokenized sequences.
+
+Key characteristics of the model:
+
+- transformer encoder architecture  
+- masked language modeling training objective  
+- contextual prediction of masked clinical events  
+- training on temporal patient event sequences  
+
+The model learns contextual relationships between events in patient histories.
+
+---
+
+## Evaluation
+
+The trained models are evaluated using two main tasks.
+
+### Masked Language Modeling
+
+Random tokens in the input sequence are masked and the model must predict the original event using the surrounding context.
+
+### Next Event Prediction
+
+The model receives a partial patient timeline and predicts the next clinical event.
+
+Evaluation metrics include:
+
+- **Top-1 accuracy**
+- **Top-5 accuracy**
+- **Top-10 accuracy**
+- **Mean Reciprocal Rank (MRR)**
+
+These metrics measure how well the model ranks the correct event among its predictions.
 
 ## How to use - Script explanation
 
