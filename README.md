@@ -93,6 +93,14 @@ Evaluation metrics include:
 
 These metrics measure how well the model ranks the correct event among its predictions.
 
+## Conclusion
+
+This project demonstrates how transformer models can be applied to temporal clinical data in order to model patient trajectories. By representing patient histories as sequences of clinical event tokens extracted from the MIMIC-IV dataset, the model learns contextual relationships between diagnoses, laboratory events, medications, and admission-related events using a masked language modeling objective.
+
+The best performing model achieved a **Top-1 accuracy of 74.35%**, **Top-5 accuracy of 92.14%**, and **Top-10 accuracy of 94.32%** on the masked language modeling task, with a **Mean Reciprocal Rank (MRR) of 0.823**. For next-event prediction, the baseline model achieved approximately **27% Top-1 accuracy** at the token level, while event-type-level prediction reached around **61.9% Top-1 accuracy**, indicating that the model captures meaningful temporal patterns even when exact event prediction is difficult.
+
+Overall, these results suggest that compact transformer architectures can effectively model longitudinal clinical event sequences. Future improvements could include integrating additional clinical modalities, refining the event tokenization strategy, and experimenting with larger transformer architectures capable of capturing longer patient histories.
+
 ## How to use - Script explanation
 
 ### Setup
