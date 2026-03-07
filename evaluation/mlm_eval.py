@@ -110,7 +110,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--avoid_random_special", action="store_true")
     p.add_argument("--use_on_the_fly_masking", action="store_true")
 
-    # ✅ sampling flags
+    # sampling flags
     p.add_argument("--sample_windows", type=bool, default=True)
     p.add_argument("--keep_prefix_n", type=int, default=3)
 

@@ -36,7 +36,7 @@ def parse_args() -> argparse.Namespace:
 
     p.add_argument("--topk", type=str, default="1,5,10")
 
-    # NOTE: horizon is a MAX cap to avoid infinite loops (we may stop earlier by stop_vocabs or seq end)
+    # horizon is a MAX cap to avoid infinite loops (we may stop earlier by stop_vocabs or seq end)
     p.add_argument(
         "--horizon",
         type=int,
@@ -456,7 +456,7 @@ def evaluate_next_event_nextn_vocab(
                         if true_tok in topk_tok_ids[:k]:
                             end_correct_at_k_global[k] += 1
                             end_correct_at_k_patient[k] += 1
-                    # NOTE: we still stop below due to "true_stop" rule (inclusive)
+                    # we still stop below due to "true_stop" rule (inclusive)
 
                 if stopped_by:
                     break

@@ -56,7 +56,7 @@ class PatientLevelEventExtractor_Short:
         events_dynamic["timestamp"] = self.to_dt(events_dynamic["timestamp"])
         events_dynamic = events_dynamic.dropna(subset=["timestamp"])
 
-        # sort for readability (Patrick can sort again)
+        # sort for readability
         events_dynamic = events_dynamic.sort_values(["subject_id", "timestamp", "event_type"], kind="mergesort")
 
         outfile = Path(str(self.OUT_DYNAMIC) + file_suffix + ".csv")

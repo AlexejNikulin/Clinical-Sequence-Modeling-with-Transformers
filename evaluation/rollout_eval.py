@@ -115,7 +115,7 @@ write per-patient outputs:
   --out_jsonl /tmp/rollout_preds.jsonl
 """
 
-# --- rollout_eval.py (patch-style: clean change) ---
+# --- rollout_eval.py ---
 
 from __future__ import annotations
 
@@ -261,7 +261,7 @@ def _load_ckpt_and_model(ckpt_path: str, device: torch.device) -> Tuple[CompactT
 
 
 
-# NEW: End-token definition by ranges
+# End-token definition by ranges
 
 @dataclass(frozen=True)
 class EndTokenSpec:
@@ -311,7 +311,7 @@ def rollout_until_end(
     mask_token_id: int,
     pad_token_id: int,
     default_event_type_id: int,
-    end_spec: EndTokenSpec,          # <-- NEW
+    end_spec: EndTokenSpec,        
     max_len: int,
     max_new_tokens: int,
     temperature: float = 1.0,
@@ -404,7 +404,7 @@ def rollout_until_end(
     return {
         "ended": bool(ended),
         "end_token": end_token,
-        "end_label": end_label,  # <-- NEW
+        "end_label": end_label,  
         "steps": int(steps),
         "pred_tokens": tokens[len(context_tokens):],
         "runtime_sec": float(dt),
@@ -421,7 +421,7 @@ def run_rollout_eval(
     mask_token_id: int,
     pad_token_id: int,
     default_event_type_id: int,
-    end_spec: EndTokenSpec,          # <-- NEW
+    end_spec: EndTokenSpec,          
     max_len: int,
     max_new_tokens: int,
     temperature: float,
@@ -482,8 +482,8 @@ def run_rollout_eval(
             "patient_id": pid,
             "n_visits": len(visits),
             "has_ground_truth": gt_tokens is not None,
-            "gt_end_label": gt_label,            # <-- NEW (label, not token id)
-            "pred_end_label": pred["end_label"], # <-- NEW
+            "gt_end_label": gt_label,           
+            "pred_end_label": pred["end_label"], 
             "pred_end_token": pred["end_token"], # keep for debugging
             "ended": pred["ended"],
             "steps": pred["steps"],
@@ -517,7 +517,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--mask_id", type=int, default=1)
     p.add_argument("--default_event_type_id", type=int, default=1)
 
-    # NEW: range-based end token config
+    # range-based end token config
     p.add_argument("--disch_start", type=int, default=77000, help="inclusive start id for discharge block")
     p.add_argument("--disch_end", type=int, default=77010, help="exclusive end id for discharge block")
     p.add_argument("--death_start", type=int, default=77010, help="inclusive start id for death block")

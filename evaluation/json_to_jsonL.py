@@ -1,17 +1,13 @@
 import json
 from pathlib import Path
 
-# --- Input e output ---
 # for test_id
 INPUT_JSON = Path("../out/sequences/test_ids.json")
 OUTPUT_JSONL = Path("../out/sequences/test_val.jsonl")
 
-
-# --- Carica le sequenze ---
 with open(INPUT_JSON, "r", encoding="utf-8") as f:
     sequences = json.load(f)
 
-# --- Scrivi in JSONL ---
 with open(OUTPUT_JSONL, "w", encoding="utf-8") as f_out:
     for i, patient_seqs in enumerate(sequences):
         

@@ -409,7 +409,7 @@ def evaluate_next_event_nextn_token(
 
             print(f"--- patient={pi} horizon_used={H_eff}/{H_max} pairwise accuracy (TOKEN-level) ---")
             for k in topk:
-                denom = float(valid_steps_patient)  # FIX: denom uses only valid steps
+                denom = float(valid_steps_patient)  # denom uses only valid steps
                 acc_k = float(correct_at_k_patient_pairwise[k]) / denom
                 sum_pairwise_acc_at_k[k] += acc_k
                 print(f"pairwise_acc@{k}={acc_k:.6f}")
@@ -420,7 +420,7 @@ def evaluate_next_event_nextn_token(
                 overlap = 0
                 for t, c_true in true_count.items():
                     overlap += min(int(c_true), int(pred_cnt.get(t, 0)))
-                # FIX: normalize by valid steps to avoid penalizing for skipped steps
+                # normalize by valid steps to avoid penalizing for skipped steps
                 score = float(overlap) / float(valid_steps_patient)
                 sum_count_score_at_k[k] += score
                 print(f"count_score@{k}={score:.6f}")

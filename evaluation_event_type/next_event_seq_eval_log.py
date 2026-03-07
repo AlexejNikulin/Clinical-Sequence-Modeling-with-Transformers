@@ -294,7 +294,6 @@ def evaluate_next_event_nextn_vocab(
                         correct_at_k_pairwise[k] += 1
                         correct_at_k_patient[k] += 1
 
-                    # 🔥 CHANGE: remove -1 from present_vocabs
                     present_vocabs = {v for v in topk_vocabs[:k] if v != -1}
 
                     d = pred_available_count_at_k[k]

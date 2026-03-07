@@ -45,15 +45,7 @@ def check_demographic_tokens(data, expected_n_demo=3):
         if len(seq) < expected_n_demo:
             violations += 1
             continue
-
-        # If your demographic tokens are fixed IDs:
-        # e.g., IDs 0–2 or some block
-        # you must define this based on your vocab.
-
-        # Example: assume demographic tokens are always first 3 positions
-        # but verify that token type matches expected range
-
-        # Replace with your real demographic ID range:
+        
         DEMO_START = 0
         DEMO_END   = 100
 
