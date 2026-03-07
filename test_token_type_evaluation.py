@@ -8,7 +8,6 @@ from vocabulary import Vocabulary
 
 
 def _get_optional_sep_id(vocab) -> int | None:
-    # falls du sowas nicht hast: return None
     if hasattr(vocab, "get_separator_token"):
         return vocab.token_to_id(vocab.get_separator_token())
     if hasattr(vocab, "get_sep_token"):
@@ -85,7 +84,7 @@ def main():
         d_model=args.d_model,
         n_layers=args.n_layers,
         n_heads=args.n_heads,
-        use_event_type_embeddings=True,  # muss True sein, weil dein Checkpoint event_type_emb hat
+        use_event_type_embeddings=True, 
         n_event_types=2,
         pad_token_id=pad_id,
         mask_token_id=mask_id,
@@ -103,8 +102,6 @@ def main():
     for i, (demo_ids, event_ids) in enumerate(joint[: args.limit]):
         input_ids, attn, seg = build_one_sequence(demo_ids, event_ids, args.max_len, pad_id, sep_id)
 
-        # Log letzte Tokens (als Strings)
-        # nur die letzten validen (non-pad) anzeigen
         valid_len = sum(attn)
         tail_n = min(50, valid_len)
 
